@@ -1,0 +1,26 @@
+# nix / direnv
+.direnv/
+result
+
+# rocq build artifacts
+*.vo
+*.vos
+*.vok
+*.glob
+*.aux
+*.d
+*.cache
+.lia.cache
+Makefile.coq
+Makefile.coq.conf
+builddep/
+
+# extraction output
+*.ml
+*.mli
+
+# ocaml build artifacts (extracted parser bench)
+bench
+*.cmi
+*.cmx
+*.o

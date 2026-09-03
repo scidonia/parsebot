@@ -1,0 +1,9 @@
+-R theories Parsebot
+
+theories/AnBn.v
+theories/Smoke.v
+theories/Spec.v
+theories/Example.v
+theories/Fence.v
+theories/FenceCompile.v
+theories/Json.v
