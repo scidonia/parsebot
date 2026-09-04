@@ -1288,6 +1288,82 @@ Proof.
   intros H. apply d_call. cbn [json_grammar]. exact H.
 Qed.
 
+(* parse_member is sound for member_spec, given the value parser's soundness at the
+   same fuel; and its result is a suffix of its input, given the value shape. *)
+Lemma parse_member_sound (fuel : nat) :
+  (forall (prefix w : list ascii) (v : Json) (rest : list ascii),
+     parse_value fuel w = Some (v, rest) ->
+     denote json_grammar (prefix ++ w) value_spec tt (List.length prefix) v tt (List.length prefix + List.length w - List.length rest)) ->
+  forall (prefix w : list ascii) (m : list ascii * Json) (rest : list ascii),
+    parse_member fuel w = Some (m, rest) ->
+    denote json_grammar (prefix ++ w) member_spec tt (List.length prefix) m tt (List.length prefix + List.length w - List.length rest).
+Proof.
+  intros Hv prefix w m rest H.
+  unfold parse_member in H.
+  destruct (parse_string w) as [[s rest1] |] eqn:Es; [| discriminate].
+  destruct (skip_ws rest1) as [| c' rest2] eqn:Eskip1; [discriminate |].
+  destruct (Ascii.eqb c' ":"%char) eqn:Ecolon; [| discriminate].
+  apply (Ascii.eqb_eq c' ":"%char) in Ecolon. subst c'.
+  destruct (parse_value fuel (skip_ws rest2)) as [[v rest3] |] eqn:Ev; [| discriminate].
+  simpl in H. injection H as Hm Hrest. subst m rest.
+  destruct (parse_string_shape w s rest1 Es) as [p1 Hp1].
+  assert (Hl : List.length rest1 = List.length (ws_part rest1) + 1 + List.length rest2) by (rewrite <- (ws_part_skip rest1) at 1; rewrite Eskip1; rewrite length_app; simpl; lia).
+  unfold member_spec.
+  apply d_bind with (a := s) (γ' := tt) (j := List.length prefix + List.length w - List.length rest1).
+  - apply (parse_string_sound prefix w s rest1 Es).
+  - apply d_bind with (a := tt) (γ' := tt) (j := List.length prefix + List.length w - List.length rest1 + List.length (ws_part rest1)).
+    + replace (List.length prefix + List.length w) with (List.length (prefix ++ w)) by (rewrite length_app; reflexivity).
+      apply (skip_ws_mid_sound (prefix ++ w) rest1).
+      exists (prefix ++ p1). rewrite <- Hp1. rewrite <- !app_assoc. reflexivity.
+    + apply d_bind with (a := tt) (γ' := tt) (j := List.length prefix + List.length w - List.length rest1 + List.length (ws_part rest1) + 1).
+      * assert (Heq : prefix ++ w = (prefix ++ p1 ++ ws_part rest1) ++ ":"%char :: rest2) by (rewrite <- Hp1; rewrite <- (ws_part_skip rest1) at 1; rewrite Eskip1; rewrite !app_assoc; reflexivity).
+        rewrite Heq.
+        replace (List.length prefix + List.length w - List.length rest1 + List.length (ws_part rest1)) with (List.length (prefix ++ p1 ++ ws_part rest1)) by (rewrite !length_app; rewrite <- Hp1; rewrite length_app; lia).
+        replace (List.length (prefix ++ p1 ++ ws_part rest1) + 1) with (S (List.length (prefix ++ p1 ++ ws_part rest1))) by lia.
+        apply (char_sound ":"%char (prefix ++ p1 ++ ws_part rest1) rest2).
+      * apply d_bind with (a := tt) (γ' := tt) (j := List.length prefix + List.length w - List.length rest1 + List.length (ws_part rest1) + 1 + List.length (ws_part rest2)).
+        -- replace (List.length prefix + List.length w) with (List.length (prefix ++ w)) by (rewrite length_app; reflexivity).
+           replace (List.length (prefix ++ w) - List.length rest1 + List.length (ws_part rest1) + 1) with (List.length (prefix ++ w) - List.length rest2) by (assert (Hle : List.length rest1 <= List.length (prefix ++ w)) by (rewrite <- Hp1; rewrite !length_app; lia); lia).
+           apply (skip_ws_mid_sound (prefix ++ w) rest2).
+           exists (prefix ++ p1 ++ ws_part rest1 ++ [":"%char]).
+           rewrite <- Hp1. rewrite <- (ws_part_skip rest1) at 2. rewrite Eskip1. rewrite <- !app_assoc. simpl. reflexivity.
+        -- apply d_map with (a := v). apply d_call. cbn [json_grammar].
+           assert (Heq2 : prefix ++ w = (prefix ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2) ++ skip_ws rest2) by (rewrite <- Hp1; rewrite <- (ws_part_skip rest1) at 1; rewrite Eskip1; rewrite <- !app_assoc; simpl; rewrite (ws_part_skip rest2); reflexivity).
+           rewrite Heq2.
+           replace (List.length prefix + List.length w - List.length rest1 + List.length (ws_part rest1) + 1 + List.length (ws_part rest2)) with (List.length (prefix ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2)) by (rewrite !length_app; rewrite <- Hp1; rewrite length_app; simpl; rewrite Hl; lia).
+           replace (List.length prefix + List.length w - List.length rest3) with (List.length (prefix ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2) + List.length (skip_ws rest2) - List.length rest3) by (rewrite !length_app; rewrite <- Hp1; rewrite length_app; simpl; pose proof (length_ws_part_skip rest2) as Hl2; lia).
+           apply (Hv (prefix ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2) (skip_ws rest2) v rest3 Ev).
+Qed.
+
+Lemma parse_member_shape (fuel : nat) :
+  (forall (w : list ascii) (v : Json) (rest : list ascii),
+     parse_value fuel w = Some (v, rest) -> { pre : list ascii & pre ++ rest = w }) ->
+  forall (w : list ascii) (m : list ascii * Json) (rest : list ascii),
+    parse_member fuel w = Some (m, rest) -> { pre : list ascii & pre ++ rest = w }.
+Proof.
+  intros Hv w m rest H.
+  unfold parse_member in H.
+  destruct (parse_string w) as [[s rest1] |] eqn:Es; [| discriminate].
+  destruct (skip_ws rest1) as [| c' rest2] eqn:Eskip1; [discriminate |].
+  destruct (Ascii.eqb c' ":"%char) eqn:Ecolon; [| discriminate].
+  apply (Ascii.eqb_eq c' ":"%char) in Ecolon. subst c'.
+  destruct (parse_value fuel (skip_ws rest2)) as [[v rest3] |] eqn:Ev; [| discriminate].
+  simpl in H. injection H as Hm Hrest. subst m rest.
+  destruct (parse_string_shape w s rest1 Es) as [p1 Hp1].
+  destruct (Hv (skip_ws rest2) v rest3 Ev) as [X HX].
+  apply (suffix_compose w rest2 rest3).
+  + apply (suffix_compose w rest1 rest2).
+    * exact (existT _ p1 Hp1).
+    * apply (suffix_compose rest1 (":"%char :: rest2) rest2).
+      -- exists (ws_part rest1). transitivity (ws_part rest1 ++ skip_ws rest1).
+         ++ rewrite Eskip1. reflexivity.
+         ++ apply (ws_part_skip rest1).
+      -- exists [":"%char]. simpl. reflexivity.
+  + apply (suffix_compose rest2 (skip_ws rest2) rest3).
+    * exact (skip_ws_suffix rest2).
+    * exact (existT _ X HX).
+Qed.
+
 (* Mutual soundness of the seven recursive functions, by strong induction on fuel. *)
 #[local] Definition sound_7 (fuel : nat) : Type :=
   (forall prefix w v rest, parse_value fuel w = Some (v, rest) ->
@@ -1503,78 +1579,11 @@ Proof.
            replace (List.length prefix + List.length (c :: w') - List.length rest4) with (List.length (prefix ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2 ++ X ++ ws_part rest3) + List.length (skip_ws rest3) - List.length rest4) by (rewrite !length_app; rewrite <- Hp1; rewrite length_app; rewrite Hl; rewrite (length_ws_part_skip rest2); rewrite <- HX; rewrite length_app; simpl; pose proof (length_ws_part_skip rest3) as Hl3; lia).
            apply d_map. apply (IHmm (prefix ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2 ++ X ++ ws_part rest3) (skip_ws rest3) ms rest4 Emm).
     + (* parse_members_more *)
-      destruct w as [| c rest0]; [discriminate |].
-      destruct (Ascii.eqb c "}"%char) eqn:Eclose.
-      * apply (Ascii.eqb_eq c "}"%char) in Eclose. subst c. simpl in Hparse.
-        injection Hparse as Hr Hrest. subst res rest.
-        unfold members_rest_spec.
-        replace (List.length prefix + List.length ("}"%char :: rest0) - List.length ("}"%char :: rest0)) with (List.length prefix) by (simpl; lia).
-        apply d_many_nil.
-      * destruct (Ascii.eqb c ","%char) eqn:Ecomma; [| simpl in *; discriminate].
-        apply (Ascii.eqb_eq c ","%char) in Ecomma. subst c.
-        destruct (parse_string (skip_ws rest0)) as [[s rest1] |] eqn:Es; [| simpl in *; discriminate].
-        destruct (skip_ws rest1) as [| c' rest2] eqn:Eskip1; [simpl in *; discriminate |].
-        destruct (Ascii.eqb c' ":"%char) eqn:Ecolon; [| simpl in *; discriminate].
-        apply (Ascii.eqb_eq c' ":"%char) in Ecolon. subst c'.
-        assert (Hl : List.length rest1 = List.length (ws_part rest1) + 1 + List.length rest2) by (rewrite <- (ws_part_skip rest1) at 1; rewrite Eskip1; rewrite length_app; simpl; lia).
-        destruct (parse_value fuel' (skip_ws rest2)) as [[v rest3] |] eqn:Ev; [| simpl in *; discriminate].
-        destruct (parse_members_more fuel' (skip_ws rest3)) as [[ms rest4] |] eqn:Emm; [| simpl in *; discriminate].
-        simpl in Hparse.
-        injection Hparse as Hr Hrest. subst res rest.
-        destruct (parse_string_shape (skip_ws rest0) s rest1 Es) as [p1 Hp1].
-        destruct (Sv (skip_ws rest2) v rest3 Ev) as [X HX].
-        assert (HleR3 : List.length rest3 <= List.length (skip_ws rest0)) by (assert (H1 : List.length rest3 <= List.length (skip_ws rest2)) by (rewrite <- HX; rewrite length_app; lia); assert (H2 : List.length (skip_ws rest2) <= List.length rest2) by (pose proof (length_ws_part_skip rest2) as Hl2; lia); assert (H3 : List.length rest2 <= List.length (skip_ws rest0)) by (rewrite <- Hp1; rewrite <- (ws_part_skip rest1) at 1; rewrite Eskip1; rewrite !length_app; simpl; lia); lia).
-        unfold members_rest_spec.
-        apply d_many_cons with (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest3) + List.length (ws_part rest3)).
-        apply d_map with (a := (tt, (s, v))).
-        apply d_seq with (γ' := tt) (j := S (List.length prefix)).
-        -- apply (char_sound ","%char prefix rest0).
-        -- apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0)).
-           ++ replace (S (List.length prefix)) with (List.length (prefix ++ ","%char :: rest0) - List.length rest0) by (rewrite !length_app; simpl; lia).
-              apply (skip_ws_mid_sound (prefix ++ (","%char :: rest0)) rest0).
-              exists (prefix ++ [","%char]). rewrite <- app_assoc. simpl. reflexivity.
-           ++ apply d_bind with (a := (s, v)) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest3)).
-              -- (* member_spec *)
-                 unfold member_spec.
-                 apply d_bind with (a := s) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)).
-                 ++ replace (prefix ++ (","%char :: rest0)) with ((prefix ++ [","%char] ++ ws_part rest0) ++ skip_ws rest0) by (rewrite <- !app_assoc; rewrite ws_part_skip; reflexivity).
-                    replace (S (List.length prefix) + List.length (ws_part rest0)) with (List.length (prefix ++ [","%char] ++ ws_part rest0)) by (rewrite !length_app; simpl; lia).
-                    replace (List.length (prefix ++ (","%char :: rest0)) - List.length rest1) with (List.length (prefix ++ [","%char] ++ ws_part rest0) + List.length (skip_ws rest0) - List.length rest1) by (rewrite !length_app; simpl; pose proof (length_ws_part_skip rest0) as Hl0; lia).
-                    replace (List.length (prefix ++ [","%char] ++ ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)) with (List.length (prefix ++ [","%char] ++ ws_part rest0) + List.length (skip_ws rest0) - List.length rest1) by (assert (Hle : List.length rest1 <= List.length (skip_ws rest0)) by (rewrite <- Hp1; rewrite length_app; lia); lia).
-                    apply (parse_string_sound (prefix ++ [","%char] ++ ws_part rest0) (skip_ws rest0) s rest1 Es).
-                 ++ apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)).
-                    replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)) with (List.length (prefix ++ (","%char :: rest0)) - List.length rest1) by (rewrite !length_app; simpl; pose proof (length_ws_part_skip rest0) as Hl0; assert (Hle : List.length rest1 <= List.length (skip_ws rest0)) by (rewrite <- Hp1; rewrite length_app; lia); lia).
-                    apply (skip_ws_mid_sound (prefix ++ (","%char :: rest0)) rest1).
-                    exists (prefix ++ [","%char] ++ ws_part rest0 ++ p1).
-                    rewrite <- !app_assoc. rewrite Hp1. rewrite (ws_part_skip rest0). simpl. reflexivity.
-                    -- apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1) + 1).
-                       ++ replace (prefix ++ (","%char :: rest0)) with ((prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1) ++ ":"%char :: rest2) by (symmetry; rewrite <- !app_assoc; rewrite <- Eskip1; rewrite (ws_part_skip rest1); rewrite Hp1; rewrite (ws_part_skip rest0); simpl; reflexivity).
-                          replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)) with (List.length (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1)) by (rewrite !length_app; simpl; rewrite <- Hp1; rewrite length_app; simpl; lia).
-                          replace (List.length (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1) + 1) with (S (List.length (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1))) by lia.
-                          apply (char_sound ":"%char (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1) rest2).
-                       ++ apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1) + 1 + List.length (ws_part rest2)).
-                          replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1) + 1) with (List.length (prefix ++ (","%char :: rest0)) - List.length rest2) by (rewrite !length_app; simpl; assert (Hp1l : List.length (skip_ws rest0) = List.length p1 + List.length rest1) by (rewrite <- Hp1; rewrite length_app; reflexivity); assert (Hl0 := length_ws_part_skip rest0); lia).
-                          apply (skip_ws_mid_sound (prefix ++ (","%char :: rest0)) rest2).
-                          exists (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1 ++ [":"%char]).
-                          rewrite <- !app_assoc. simpl. rewrite <- Eskip1. rewrite (ws_part_skip rest1). rewrite Hp1. rewrite (ws_part_skip rest0). simpl. reflexivity.
-                          -- apply d_map. apply d_call. cbn [json_grammar].
-                             assert (Heq : prefix ++ (","%char :: rest0) = (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2) ++ skip_ws rest2) by (symmetry; rewrite <- !app_assoc; rewrite (ws_part_skip rest2); simpl; rewrite <- Eskip1; rewrite (ws_part_skip rest1); rewrite Hp1; rewrite (ws_part_skip rest0); simpl; reflexivity).
-                             rewrite Heq.
-                             replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1) + 1 + List.length (ws_part rest2)) with (List.length (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2)) by (rewrite !length_app; simpl; assert (Hp1l : List.length (skip_ws rest0) = List.length p1 + List.length rest1) by (rewrite <- Hp1; rewrite length_app; reflexivity); lia).
-                             replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest3)) with (List.length (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2) + List.length (skip_ws rest2) - List.length rest3) by (rewrite !length_app; simpl; assert (Hp1l : List.length (skip_ws rest0) = List.length p1 + List.length rest1) by (rewrite <- Hp1; rewrite length_app; reflexivity); assert (Hle : List.length rest3 <= List.length (skip_ws rest2)) by (rewrite <- HX; rewrite length_app; lia); pose proof (length_ws_part_skip rest2) as Hl2; lia).
-                             apply (IHv (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2) (skip_ws rest2) v rest3 Ev).
-              -- (* ws before recursion, then IHmm *)
-                 apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest3) + List.length (ws_part rest3)).
-                 replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest3)) with (List.length (prefix ++ (","%char :: rest0)) - List.length rest3) by (rewrite !length_app; simpl; pose proof (length_ws_part_skip rest0) as Hl0; lia).
-                 apply (skip_ws_mid_sound (prefix ++ (","%char :: rest0)) rest3).
-                    exists (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2 ++ X).
-                    rewrite <- !app_assoc. simpl. rewrite HX. rewrite (ws_part_skip rest2). rewrite <- Eskip1. rewrite (ws_part_skip rest1). rewrite Hp1. rewrite (ws_part_skip rest0). simpl. reflexivity.
-                 ++ apply d_pure.
-                 replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest3) + List.length (ws_part rest3)) with (List.length (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2 ++ X ++ ws_part rest3)) by (rewrite !length_app; rewrite <- Hp1; rewrite length_app; rewrite Hl; rewrite (length_ws_part_skip rest2); rewrite <- HX; rewrite length_app; simpl; lia).
-                 replace (List.length prefix + List.length (","%char :: rest0) - List.length rest4) with (List.length (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2 ++ X ++ ws_part rest3) + List.length (skip_ws rest3) - List.length rest4) by (rewrite !length_app; simpl; assert (Hp1l : List.length (skip_ws rest0) = List.length p1 + List.length rest1) by (rewrite <- Hp1; rewrite length_app; reflexivity); assert (HXl : List.length (skip_ws rest2) = List.length X + List.length rest3) by (rewrite <- HX; rewrite length_app; reflexivity); pose proof (length_ws_part_skip rest0) as Hl0; pose proof (length_ws_part_skip rest2) as Hl2; pose proof (length_ws_part_skip rest3) as Hl3; lia).
-                 assert (Heq : prefix ++ (","%char :: rest0) = (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2 ++ X ++ ws_part rest3) ++ skip_ws rest3) by (symmetry; rewrite <- !app_assoc; rewrite (ws_part_skip rest3); rewrite HX; rewrite (ws_part_skip rest2); simpl; rewrite <- Eskip1; rewrite (ws_part_skip rest1); rewrite Hp1; rewrite (ws_part_skip rest0); simpl; reflexivity).
-                 rewrite Heq.
-                 apply (IHmm (prefix ++ [","%char] ++ ws_part rest0 ++ p1 ++ ws_part rest1 ++ [":"%char] ++ ws_part rest2 ++ X ++ ws_part rest3) (skip_ws rest3) ms rest4 Emm).
+      apply (sep_by_sound (list ascii * Json) member_spec parse_member ","%char "}"%char (S fuel')
+        (fun m Hlt prefix w mm rest H => parse_member_sound m (fst (fst (fst (fst (fst (fst (IH m Hlt))))))) prefix w mm rest H)
+        (fun m w mm rest H => parse_member_shape m (fst (fst (fst (fst (fst (fst (parse_all_shape m))))))) w mm rest H)
+        prefix w res rest).
+      rewrite <- (parse_members_more_equiv_sep_by (S fuel') w). exact Hparse.
     + (* parse_elements *)
       destruct w as [| c w']; [discriminate |].
       destruct (Ascii.eqb c "]"%char) eqn:Eclose.
