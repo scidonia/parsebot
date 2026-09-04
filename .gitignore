@@ -22,5 +22,6 @@ builddep/
 # ocaml build artifacts (extracted parser bench)
 bench
 *.cmi
+*.cmo
 *.cmx
 *.o
