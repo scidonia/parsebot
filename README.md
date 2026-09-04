@@ -6,7 +6,7 @@
 
 A grammar is a **data structure**; a parser is a **function**; the proof that they agree is a **derivation** that *is* the parse.
 
-The innovation: the *implementation* and the *certification proof* can both be produced by **AI** — the **BNF is all one needs to understand**.
+The innovation: the *implementation* and the *certification proof* can both be produced by **AI** — from the **BNF** *plus explicit disambiguation decisions* (the BNF is relational/unordered; ordered choice, lookahead, and the ambiguity policy are separate declarative decisions).
 
 ## What's here
 

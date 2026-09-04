@@ -40,13 +40,23 @@ layout: center
 <div class="text-xl">
 
 The **innovation**: the *implementation* and the *certification proof*
-can both be produced by **AI** — the **BNF is all one needs to understand**.
+can both be produced by **AI** — from the **BNF** *plus explicit
+disambiguation decisions*.
 
 </div>
 
 <div class="mt-8 text-lg text-gray-300">
 
-grammar&nbsp;(declarative) &nbsp;⟹&nbsp; parser&nbsp;(executable) &nbsp;⟹&nbsp; proof&nbsp;(certificate)
+grammar&nbsp;(declarative)&nbsp;+&nbsp;ambiguity&nbsp;policy &nbsp;⟹&nbsp; parser&nbsp;(executable) &nbsp;⟹&nbsp; proof&nbsp;(certificate)
+
+</div>
+
+<div class="mt-4 text-sm text-gray-400">
+
+The BNF is <em>relational</em> — <code>Alt</code> is unordered, <code>Many</code> admits the empty
+branch. The parser additionally commits to <em>ordered choice</em> and <em>lookahead</em>, under a
+declared <em>ambiguity policy</em> (Recognition / Canonical / All-parses / Unambiguous). Those are
+separate declarative decisions; the BNF alone is not enough.
 
 </div>
 
