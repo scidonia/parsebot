@@ -1178,6 +1178,133 @@ Proof.
         | simpl in *; discriminate ] ].
 Qed.
 
+(* The generic loop is sound for `Many (Map snd (Seq (char sep) (Bind ws
+   (Bind elem (Bind ws (Pure))))))`. Instantiated alongside `sep_by_complete`. *)
+Lemma sep_by_sound (A : Type) (elem : Spec ascii unit json_nt A)
+  (elem_parser : nat -> list ascii -> option (A * list ascii)) (sep closer : ascii) :
+  forall (fuel : nat),
+    (forall (fuel' : nat), fuel' < fuel -> forall (prefix w : list ascii) (a : A) (rest : list ascii),
+       elem_parser fuel' w = Some (a, rest) ->
+       denote json_grammar (prefix ++ w) elem tt (List.length prefix) a tt (List.length prefix + List.length w - List.length rest)) ->
+    (forall (fuel : nat) (w : list ascii) (a : A) (rest : list ascii),
+       elem_parser fuel w = Some (a, rest) -> { pre : list ascii & pre ++ rest = w }) ->
+    forall (prefix w : list ascii) (xs : list A) (rest : list ascii),
+      sep_by A elem_parser sep closer fuel w = Some (xs, rest) ->
+      denote json_grammar (prefix ++ w)
+        (Many (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a : A => Bind ws (fun _ : unit => Pure a)))))))
+        tt (List.length prefix) xs tt (List.length prefix + List.length w - List.length rest).
+Proof.
+  apply (@well_founded_induction_type nat lt lt_wf
+    (fun fuel : nat =>
+      (forall (fuel' : nat), fuel' < fuel -> forall (prefix w : list ascii) (a : A) (rest : list ascii),
+         elem_parser fuel' w = Some (a, rest) ->
+         denote json_grammar (prefix ++ w) elem tt (List.length prefix) a tt (List.length prefix + List.length w - List.length rest)) ->
+      (forall (fuel : nat) (w : list ascii) (a : A) (rest : list ascii),
+         elem_parser fuel w = Some (a, rest) -> { pre : list ascii & pre ++ rest = w }) ->
+      forall (prefix w : list ascii) (xs : list A) (rest : list ascii),
+        sep_by A elem_parser sep closer fuel w = Some (xs, rest) ->
+        denote json_grammar (prefix ++ w)
+          (Many (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a : A => Bind ws (fun _ : unit => Pure a)))))))
+          tt (List.length prefix) xs tt (List.length prefix + List.length w - List.length rest))).
+  intros fuel IH Hsnd Hshape prefix w xs rest H.
+  destruct fuel as [| f].
+  - cbn [sep_by] in H. discriminate.
+  - cbn [sep_by] in H.
+    destruct w as [| c rest0]; [discriminate |].
+    destruct (Ascii.eqb c closer) eqn:Eclose.
+    * apply (Ascii.eqb_eq c closer) in Eclose. subst c. simpl in H.
+      injection H as Hxs Hrest. subst xs rest.
+      replace (List.length prefix + List.length (closer :: rest0) - List.length (closer :: rest0)) with (List.length prefix) by (simpl; lia).
+      apply d_many_nil.
+    * destruct (Ascii.eqb c sep) eqn:Esep; [| simpl in *; discriminate].
+      apply (Ascii.eqb_eq c sep) in Esep. subst c.
+      destruct (elem_parser f (skip_ws rest0)) as [[a rest1] |] eqn:Ee; [| simpl in *; discriminate].
+      destruct (sep_by A elem_parser sep closer f (skip_ws rest1)) as [[xs' rest2] |] eqn:Es; [| simpl in *; discriminate].
+      simpl in H. injection H as Hxs Hrest. subst xs rest.
+      destruct (Hshape f (skip_ws rest0) a rest1 Ee) as [X HX].
+      apply d_many_cons with (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)).
+      apply d_map with (a := (tt, a)).
+      apply d_seq with (γ' := tt) (j := S (List.length prefix)).
+      -- apply (char_sound sep prefix rest0).
+      -- apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0)).
+         ++ replace (S (List.length prefix)) with (List.length (prefix ++ sep :: rest0) - List.length rest0) by (rewrite !length_app; simpl; lia).
+            apply (skip_ws_mid_sound (prefix ++ (sep :: rest0)) rest0).
+            exists (prefix ++ [sep]). rewrite <- app_assoc. simpl. reflexivity.
+         ++ apply d_bind with (a := a) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)).
+            -- replace (prefix ++ (sep :: rest0)) with ((prefix ++ [sep] ++ ws_part rest0) ++ skip_ws rest0) by (rewrite <- !app_assoc; rewrite ws_part_skip; reflexivity).
+               replace (S (List.length prefix) + List.length (ws_part rest0)) with (List.length (prefix ++ [sep] ++ ws_part rest0)) by (rewrite !length_app; simpl; lia).
+               replace (List.length (prefix ++ [sep] ++ ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)) with (List.length (prefix ++ [sep] ++ ws_part rest0) + List.length (skip_ws rest0) - List.length rest1) by (assert (Hle : List.length rest1 <= List.length (skip_ws rest0)) by (rewrite <- HX; rewrite length_app; lia); lia).
+               apply (Hsnd f (Nat.lt_succ_diag_r f) (prefix ++ [sep] ++ ws_part rest0) (skip_ws rest0) a rest1 Ee).
+            -- apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)).
+               ++ replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)) with (List.length (prefix ++ (sep :: rest0)) - List.length rest1) by (rewrite !length_app; simpl; pose proof (length_ws_part_skip rest0) as Hl0; assert (Hle : List.length rest1 <= List.length (skip_ws rest0)) by (rewrite <- HX; rewrite length_app; lia); lia).
+                  apply (skip_ws_mid_sound (prefix ++ (sep :: rest0)) rest1).
+                  exists (prefix ++ [sep] ++ ws_part rest0 ++ X).
+                  rewrite <- !app_assoc. rewrite HX. rewrite (ws_part_skip rest0). simpl. reflexivity.
+               ++ apply d_pure.
+               ++ replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)) with (List.length (prefix ++ [sep] ++ ws_part rest0 ++ X ++ ws_part rest1)) by (rewrite !length_app; rewrite <- HX; rewrite length_app; simpl; lia).
+                  replace (List.length prefix + List.length (sep :: rest0) - List.length rest2) with (List.length (prefix ++ [sep] ++ ws_part rest0 ++ X ++ ws_part rest1) + List.length (skip_ws rest1) - List.length rest2) by (rewrite !length_app; simpl; assert (HXl : List.length X + List.length rest1 = List.length (skip_ws rest0)) by (rewrite <- HX; rewrite length_app; reflexivity); pose proof (length_ws_part_skip rest0) as Hl0; pose proof (length_ws_part_skip rest1) as Hl1; assert (Hle : List.length rest2 <= List.length (skip_ws rest1)) by (destruct (sep_by_shape A elem_parser sep closer Hshape f (skip_ws rest1) xs' rest2 Es) as [pre Hpre]; rewrite <- Hpre; rewrite length_app; lia); lia).
+                  assert (Heq : prefix ++ (sep :: rest0) = (prefix ++ [sep] ++ ws_part rest0 ++ X ++ ws_part rest1) ++ skip_ws rest1) by (rewrite <- !app_assoc; rewrite (ws_part_skip rest1); rewrite HX; rewrite (ws_part_skip rest0); simpl; reflexivity).
+                  rewrite Heq.
+                  apply (IH f (Nat.lt_succ_diag_r f) (fun fuel' Hlt => Hsnd fuel' (Nat.lt_trans fuel' f (S f) Hlt (Nat.lt_succ_diag_r f))) Hshape (prefix ++ [sep] ++ ws_part rest0 ++ X ++ ws_part rest1) (skip_ws rest1) xs' rest2 Es).
+Qed.
+
+(* The hand-written tail functions are extensionally the generic loop:
+   `parse_elements_more` is `sep_by` with the value parser as the element. *)
+Lemma parse_elements_more_equiv_sep_by : forall (fuel : nat) (w : list ascii),
+  parse_elements_more fuel w = sep_by Json parse_value ","%char "]"%char fuel w.
+Proof.
+  intros fuel w. revert w.
+  induction fuel as [| f IH]; intros w; simpl.
+  - reflexivity.
+  - destruct w as [| c rest]; [reflexivity |].
+    destruct (Ascii.eqb c "]"%char) eqn:E1; [reflexivity |].
+    destruct (Ascii.eqb c ","%char) eqn:E2; [| reflexivity].
+    destruct (parse_value f (skip_ws rest)) as [[v rest1] |] eqn:Ev; [| reflexivity].
+    rewrite IH. reflexivity.
+Qed.
+(* Same for members: `parse_members_more` is `sep_by` with `parse_member`. *)
+Lemma parse_members_more_equiv_sep_by : forall (fuel : nat) (w : list ascii),
+  parse_members_more fuel w = sep_by (list ascii * Json) parse_member ","%char "}"%char fuel w.
+Proof.
+  intros fuel w. revert w.
+  induction fuel as [| f IH]; intros w; simpl.
+  - reflexivity.
+  - destruct w as [| c rest]; [reflexivity |].
+    unfold parse_member.
+    destruct (Ascii.eqb c "}"%char) eqn:E1; [reflexivity |].
+    destruct (Ascii.eqb c ","%char) eqn:E2; [| reflexivity].
+    destruct (parse_string (skip_ws rest)) as [[s rest1] |] eqn:Es; [| reflexivity].
+    destruct (skip_ws rest1) as [| c' rest2] eqn:Ew; [reflexivity |].
+    destruct (Ascii.eqb c' ":"%char) eqn:E3; [| reflexivity].
+    destruct (parse_value f (skip_ws rest2)) as [[v rest3] |] eqn:Ev; [| reflexivity].
+    rewrite IH. reflexivity.
+Qed.
+
+(* Bridge: a value_spec denotation is a Call NT_value denotation. *)
+Lemma value_sound_call (prefix w : list ascii) (v : Json) (j : nat) :
+  denote json_grammar (prefix ++ w) value_spec tt (List.length prefix) v tt j ->
+  denote json_grammar (prefix ++ w) (Call NT_value) tt (List.length prefix) v tt j.
+Proof.
+  intros H. apply d_call. cbn [json_grammar]. exact H.
+Qed.
+
+(* Mutual soundness of the seven recursive functions, by strong induction on fuel. *)
+#[local] Definition sound_7 (fuel : nat) : Type :=
+  (forall prefix w v rest, parse_value fuel w = Some (v, rest) ->
+      denote json_grammar (prefix ++ w) value_spec tt (List.length prefix) v tt (List.length prefix + List.length w - List.length rest))
+  * (forall prefix w ms rest, parse_object fuel w = Some (ms, rest) ->
+      denote json_grammar (prefix ++ w) object_body_spec tt (List.length prefix) ms tt (List.length prefix + List.length w - List.length rest))
+  * (forall prefix w vs rest, parse_array fuel w = Some (vs, rest) ->
+      denote json_grammar (prefix ++ w) array_body_spec tt (List.length prefix) vs tt (List.length prefix + List.length w - List.length rest))
+  * (forall prefix w ms rest, parse_members fuel w = Some (ms, rest) ->
+      denote json_grammar (prefix ++ w) members_spec tt (List.length prefix) ms tt (List.length prefix + List.length w - List.length rest))
+  * (forall prefix w ms rest, parse_members_more fuel w = Some (ms, rest) ->
+      denote json_grammar (prefix ++ w) members_rest_spec tt (List.length prefix) ms tt (List.length prefix + List.length w - List.length rest))
+  * (forall prefix w vs rest, parse_elements fuel w = Some (vs, rest) ->
+      denote json_grammar (prefix ++ w) elements_spec tt (List.length prefix) vs tt (List.length prefix + List.length w - List.length rest))
+  * (forall prefix w vs rest, parse_elements_more fuel w = Some (vs, rest) ->
+      denote json_grammar (prefix ++ w) elements_rest_spec tt (List.length prefix) vs tt (List.length prefix + List.length w - List.length rest)).
+
 (* Mutual soundness of the seven recursive functions, by induction on fuel. *)
 Lemma parse_all_sound : forall fuel,
   (forall prefix w v rest, parse_value fuel w = Some (v, rest) ->
@@ -1195,11 +1322,13 @@ Lemma parse_all_sound : forall fuel,
   * (forall prefix w vs rest, parse_elements_more fuel w = Some (vs, rest) ->
       denote json_grammar (prefix ++ w) elements_rest_spec tt (List.length prefix) vs tt (List.length prefix + List.length w - List.length rest)).
 Proof.
-  induction fuel as [| fuel' IH]; simpl.
+  apply (@well_founded_induction_type nat lt lt_wf sound_7).
+  intros fuel IH.
+  destruct fuel as [| fuel']; simpl.
   - repeat split; intros; discriminate.
-  - destruct IH as [[[[[[IHv IHo] IHa] IHm] IHmm] IHe] IHem].
+  - destruct (IH fuel' (Nat.lt_succ_diag_r fuel')) as [[[[[[IHv IHo] IHa] IHm] IHmm] IHe] IHem].
     destruct (parse_all_shape fuel') as [[[[[[Sv So] Sa] Sm] Smm] Se] Sem].
-    repeat split; intros prefix w res rest Hparse.
+    repeat split; intros prefix w res rest Hparse; cbn [parse_value parse_object parse_array parse_members parse_members_more parse_elements parse_elements_more] in Hparse.
     + (* parse_value *)
       destruct w as [| c w']; [discriminate |].
       destruct (Ascii.eqb c "{"%char) eqn:Ebrace.
@@ -1471,46 +1600,12 @@ Proof.
               replace (List.length prefix + List.length (c :: w') - List.length rest1) with (List.length (prefix ++ X ++ ws_part rest0) + List.length (skip_ws rest0) - List.length rest1) by (rewrite !length_app; assert (HXl : List.length X + List.length rest0 = List.length (c :: w')) by (rewrite <- HX; rewrite length_app; reflexivity); pose proof (length_ws_part_skip rest0) as Hl0; assert (Hle : List.length rest1 <= List.length (skip_ws rest0)) by (destruct (Sem (skip_ws rest0) vs rest1 Eem) as [pre Hpre]; rewrite <- Hpre; rewrite length_app; lia); lia).
               apply d_map. apply (IHem (prefix ++ X ++ ws_part rest0) (skip_ws rest0) vs rest1 Eem).
     + (* parse_elements_more *)
-      destruct w as [| c rest0]; [discriminate |].
-      destruct (Ascii.eqb c "]"%char) eqn:Eclose.
-      * apply (Ascii.eqb_eq c "]"%char) in Eclose. subst c. simpl in Hparse.
-        injection Hparse as Hr Hrest. subst res rest.
-        unfold elements_rest_spec.
-        replace (List.length prefix + List.length ("]"%char :: rest0) - List.length ("]"%char :: rest0)) with (List.length prefix) by (simpl; lia).
-        apply d_many_nil.
-      * destruct (Ascii.eqb c ","%char) eqn:Ecomma; [| simpl in *; discriminate].
-        apply (Ascii.eqb_eq c ","%char) in Ecomma. subst c.
-        destruct (parse_value fuel' (skip_ws rest0)) as [[v rest1] |] eqn:Ev; [| simpl in *; discriminate].
-        destruct (parse_elements_more fuel' (skip_ws rest1)) as [[vs rest2] |] eqn:Eem; [| simpl in *; discriminate].
-        simpl in Hparse.
-        injection Hparse as Hr Hrest. subst res rest.
-        destruct (Sv (skip_ws rest0) v rest1 Ev) as [X HX].
-        unfold elements_rest_spec.
-        apply d_many_cons with (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)).
-        apply d_map with (a := (tt, v)).
-        apply d_seq with (γ' := tt) (j := S (List.length prefix)).
-        -- apply (char_sound ","%char prefix rest0).
-        -- apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0)).
-           ++ replace (S (List.length prefix)) with (List.length (prefix ++ ","%char :: rest0) - List.length rest0) by (rewrite !length_app; simpl; lia).
-              apply (skip_ws_mid_sound (prefix ++ (","%char :: rest0)) rest0).
-              exists (prefix ++ [","%char]). rewrite <- app_assoc. simpl. reflexivity.
-           ++ apply d_bind with (a := v) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)).
-              -- apply d_call. cbn [json_grammar].
-                 replace (prefix ++ (","%char :: rest0)) with ((prefix ++ [","%char] ++ ws_part rest0) ++ skip_ws rest0) by (rewrite <- !app_assoc; rewrite ws_part_skip; reflexivity).
-                 replace (S (List.length prefix) + List.length (ws_part rest0)) with (List.length (prefix ++ [","%char] ++ ws_part rest0)) by (rewrite !length_app; simpl; lia).
-                 replace (List.length (prefix ++ [","%char] ++ ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)) with (List.length (prefix ++ [","%char] ++ ws_part rest0) + List.length (skip_ws rest0) - List.length rest1) by (assert (Hle : List.length rest1 <= List.length (skip_ws rest0)) by (rewrite <- HX; rewrite length_app; lia); lia).
-                 apply (IHv (prefix ++ [","%char] ++ ws_part rest0) (skip_ws rest0) v rest1 Ev).
-              -- apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)).
-                 ++ replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)) with (List.length (prefix ++ (","%char :: rest0)) - List.length rest1) by (rewrite !length_app; simpl; pose proof (length_ws_part_skip rest0) as Hl0; assert (Hle : List.length rest1 <= List.length (skip_ws rest0)) by (rewrite <- HX; rewrite length_app; lia); lia).
-                    apply (skip_ws_mid_sound (prefix ++ (","%char :: rest0)) rest1).
-                    exists (prefix ++ [","%char] ++ ws_part rest0 ++ X).
-                    rewrite <- !app_assoc. rewrite HX. rewrite (ws_part_skip rest0). simpl. reflexivity.
-                 ++ apply d_pure.
-                 ++ replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)) with (List.length (prefix ++ [","%char] ++ ws_part rest0 ++ X ++ ws_part rest1)) by (rewrite !length_app; rewrite <- HX; rewrite length_app; simpl; lia).
-                    replace (List.length prefix + List.length (","%char :: rest0) - List.length rest2) with (List.length (prefix ++ [","%char] ++ ws_part rest0 ++ X ++ ws_part rest1) + List.length (skip_ws rest1) - List.length rest2) by (rewrite !length_app; simpl; assert (HXl : List.length X + List.length rest1 = List.length (skip_ws rest0)) by (rewrite <- HX; rewrite length_app; reflexivity); pose proof (length_ws_part_skip rest0) as Hl0; pose proof (length_ws_part_skip rest1) as Hl1; assert (Hle : List.length rest2 <= List.length (skip_ws rest1)) by (destruct (Sem (skip_ws rest1) vs rest2 Eem) as [pre Hpre]; rewrite <- Hpre; rewrite length_app; lia); lia).
-                    assert (Heq : prefix ++ (","%char :: rest0) = (prefix ++ [","%char] ++ ws_part rest0 ++ X ++ ws_part rest1) ++ skip_ws rest1) by (rewrite <- !app_assoc; rewrite (ws_part_skip rest1); rewrite HX; rewrite (ws_part_skip rest0); simpl; reflexivity).
-                    rewrite Heq.
-                    apply (IHem (prefix ++ [","%char] ++ ws_part rest0 ++ X ++ ws_part rest1) (skip_ws rest1) vs rest2 Eem).
+      apply (sep_by_sound Json (Call NT_value) parse_value ","%char "]"%char (S fuel')
+        (fun m Hlt prefix w v rest H => value_sound_call prefix w v (List.length prefix + List.length w - List.length rest)
+          (fst (fst (fst (fst (fst (fst (IH m Hlt)))))) prefix w v rest H))
+        (fun fuel w v rest H => fst (fst (fst (fst (fst (fst (parse_all_shape fuel)))))) w v rest H)
+        prefix w res rest).
+      rewrite <- (parse_elements_more_equiv_sep_by (S fuel') w). exact Hparse.
 Qed.
 (* Whole-document soundness. *)
 Lemma parse_json_sound (w : list ascii) (v : Json) :
@@ -2655,109 +2750,6 @@ Proof.
     rewrite Hskip_mid. rewrite Hrest_pad.
     cbn [Ascii.eqb]. reflexivity.
 Qed.
-(* The generic loop is sound for `Many (Map snd (Seq (char sep) (Bind ws
-   (Bind elem (Bind ws (Pure))))))`. Instantiated alongside `sep_by_complete`. *)
-Lemma sep_by_sound (A : Type) (elem : Spec ascii unit json_nt A)
-  (elem_parser : nat -> list ascii -> option (A * list ascii)) (sep closer : ascii) :
-  forall (fuel : nat),
-    (forall (fuel' : nat), fuel' < fuel -> forall (prefix w : list ascii) (a : A) (rest : list ascii),
-       elem_parser fuel' w = Some (a, rest) ->
-       denote json_grammar (prefix ++ w) elem tt (List.length prefix) a tt (List.length prefix + List.length w - List.length rest)) ->
-    (forall (fuel : nat) (w : list ascii) (a : A) (rest : list ascii),
-       elem_parser fuel w = Some (a, rest) -> { pre : list ascii & pre ++ rest = w }) ->
-    forall (prefix w : list ascii) (xs : list A) (rest : list ascii),
-      sep_by A elem_parser sep closer fuel w = Some (xs, rest) ->
-      denote json_grammar (prefix ++ w)
-        (Many (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a : A => Bind ws (fun _ : unit => Pure a)))))))
-        tt (List.length prefix) xs tt (List.length prefix + List.length w - List.length rest).
-Proof.
-  apply (@well_founded_induction_type nat lt lt_wf
-    (fun fuel : nat =>
-      (forall (fuel' : nat), fuel' < fuel -> forall (prefix w : list ascii) (a : A) (rest : list ascii),
-         elem_parser fuel' w = Some (a, rest) ->
-         denote json_grammar (prefix ++ w) elem tt (List.length prefix) a tt (List.length prefix + List.length w - List.length rest)) ->
-      (forall (fuel : nat) (w : list ascii) (a : A) (rest : list ascii),
-         elem_parser fuel w = Some (a, rest) -> { pre : list ascii & pre ++ rest = w }) ->
-      forall (prefix w : list ascii) (xs : list A) (rest : list ascii),
-        sep_by A elem_parser sep closer fuel w = Some (xs, rest) ->
-        denote json_grammar (prefix ++ w)
-          (Many (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a : A => Bind ws (fun _ : unit => Pure a)))))))
-          tt (List.length prefix) xs tt (List.length prefix + List.length w - List.length rest))).
-  intros fuel IH Hsnd Hshape prefix w xs rest H.
-  destruct fuel as [| f].
-  - cbn [sep_by] in H. discriminate.
-  - cbn [sep_by] in H.
-    destruct w as [| c rest0]; [discriminate |].
-    destruct (Ascii.eqb c closer) eqn:Eclose.
-    * apply (Ascii.eqb_eq c closer) in Eclose. subst c. simpl in H.
-      injection H as Hxs Hrest. subst xs rest.
-      replace (List.length prefix + List.length (closer :: rest0) - List.length (closer :: rest0)) with (List.length prefix) by (simpl; lia).
-      apply d_many_nil.
-    * destruct (Ascii.eqb c sep) eqn:Esep; [| simpl in *; discriminate].
-      apply (Ascii.eqb_eq c sep) in Esep. subst c.
-      destruct (elem_parser f (skip_ws rest0)) as [[a rest1] |] eqn:Ee; [| simpl in *; discriminate].
-      destruct (sep_by A elem_parser sep closer f (skip_ws rest1)) as [[xs' rest2] |] eqn:Es; [| simpl in *; discriminate].
-      simpl in H. injection H as Hxs Hrest. subst xs rest.
-      destruct (Hshape f (skip_ws rest0) a rest1 Ee) as [X HX].
-      apply d_many_cons with (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)).
-      apply d_map with (a := (tt, a)).
-      apply d_seq with (γ' := tt) (j := S (List.length prefix)).
-      -- apply (char_sound sep prefix rest0).
-      -- apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0)).
-         ++ replace (S (List.length prefix)) with (List.length (prefix ++ sep :: rest0) - List.length rest0) by (rewrite !length_app; simpl; lia).
-            apply (skip_ws_mid_sound (prefix ++ (sep :: rest0)) rest0).
-            exists (prefix ++ [sep]). rewrite <- app_assoc. simpl. reflexivity.
-         ++ apply d_bind with (a := a) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)).
-            -- replace (prefix ++ (sep :: rest0)) with ((prefix ++ [sep] ++ ws_part rest0) ++ skip_ws rest0) by (rewrite <- !app_assoc; rewrite ws_part_skip; reflexivity).
-               replace (S (List.length prefix) + List.length (ws_part rest0)) with (List.length (prefix ++ [sep] ++ ws_part rest0)) by (rewrite !length_app; simpl; lia).
-               replace (List.length (prefix ++ [sep] ++ ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)) with (List.length (prefix ++ [sep] ++ ws_part rest0) + List.length (skip_ws rest0) - List.length rest1) by (assert (Hle : List.length rest1 <= List.length (skip_ws rest0)) by (rewrite <- HX; rewrite length_app; lia); lia).
-               apply (Hsnd f (Nat.lt_succ_diag_r f) (prefix ++ [sep] ++ ws_part rest0) (skip_ws rest0) a rest1 Ee).
-            -- apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)).
-               ++ replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)) with (List.length (prefix ++ (sep :: rest0)) - List.length rest1) by (rewrite !length_app; simpl; pose proof (length_ws_part_skip rest0) as Hl0; assert (Hle : List.length rest1 <= List.length (skip_ws rest0)) by (rewrite <- HX; rewrite length_app; lia); lia).
-                  apply (skip_ws_mid_sound (prefix ++ (sep :: rest0)) rest1).
-                  exists (prefix ++ [sep] ++ ws_part rest0 ++ X).
-                  rewrite <- !app_assoc. rewrite HX. rewrite (ws_part_skip rest0). simpl. reflexivity.
-               ++ apply d_pure.
-               ++ replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)) with (List.length (prefix ++ [sep] ++ ws_part rest0 ++ X ++ ws_part rest1)) by (rewrite !length_app; rewrite <- HX; rewrite length_app; simpl; lia).
-                  replace (List.length prefix + List.length (sep :: rest0) - List.length rest2) with (List.length (prefix ++ [sep] ++ ws_part rest0 ++ X ++ ws_part rest1) + List.length (skip_ws rest1) - List.length rest2) by (rewrite !length_app; simpl; assert (HXl : List.length X + List.length rest1 = List.length (skip_ws rest0)) by (rewrite <- HX; rewrite length_app; reflexivity); pose proof (length_ws_part_skip rest0) as Hl0; pose proof (length_ws_part_skip rest1) as Hl1; assert (Hle : List.length rest2 <= List.length (skip_ws rest1)) by (destruct (sep_by_shape A elem_parser sep closer Hshape f (skip_ws rest1) xs' rest2 Es) as [pre Hpre]; rewrite <- Hpre; rewrite length_app; lia); lia).
-                  assert (Heq : prefix ++ (sep :: rest0) = (prefix ++ [sep] ++ ws_part rest0 ++ X ++ ws_part rest1) ++ skip_ws rest1) by (rewrite <- !app_assoc; rewrite (ws_part_skip rest1); rewrite HX; rewrite (ws_part_skip rest0); simpl; reflexivity).
-                  rewrite Heq.
-                  apply (IH f (Nat.lt_succ_diag_r f) (fun fuel' Hlt => Hsnd fuel' (Nat.lt_trans fuel' f (S f) Hlt (Nat.lt_succ_diag_r f))) Hshape (prefix ++ [sep] ++ ws_part rest0 ++ X ++ ws_part rest1) (skip_ws rest1) xs' rest2 Es).
-Qed.
-
-(* The hand-written tail functions are extensionally the generic loop:
-   `parse_elements_more` is `sep_by` with the value parser as the element. *)
-Lemma parse_elements_more_equiv_sep_by : forall (fuel : nat) (w : list ascii),
-  parse_elements_more fuel w = sep_by Json parse_value ","%char "]"%char fuel w.
-Proof.
-  intros fuel w. revert w.
-  induction fuel as [| f IH]; intros w; simpl.
-  - reflexivity.
-  - destruct w as [| c rest]; [reflexivity |].
-    destruct (Ascii.eqb c "]"%char) eqn:E1; [reflexivity |].
-    destruct (Ascii.eqb c ","%char) eqn:E2; [| reflexivity].
-    destruct (parse_value f (skip_ws rest)) as [[v rest1] |] eqn:Ev; [| reflexivity].
-    rewrite IH. reflexivity.
-Qed.
-(* Same for members: `parse_members_more` is `sep_by` with `parse_member`. *)
-Lemma parse_members_more_equiv_sep_by : forall (fuel : nat) (w : list ascii),
-  parse_members_more fuel w = sep_by (list ascii * Json) parse_member ","%char "}"%char fuel w.
-Proof.
-  intros fuel w. revert w.
-  induction fuel as [| f IH]; intros w; simpl.
-  - reflexivity.
-  - destruct w as [| c rest]; [reflexivity |].
-    unfold parse_member.
-    destruct (Ascii.eqb c "}"%char) eqn:E1; [reflexivity |].
-    destruct (Ascii.eqb c ","%char) eqn:E2; [| reflexivity].
-    destruct (parse_string (skip_ws rest)) as [[s rest1] |] eqn:Es; [| reflexivity].
-    destruct (skip_ws rest1) as [| c' rest2] eqn:Ew; [reflexivity |].
-    destruct (Ascii.eqb c' ":"%char) eqn:E3; [| reflexivity].
-    destruct (parse_value f (skip_ws rest2)) as [[v rest3] |] eqn:Ev; [| reflexivity].
-    rewrite IH. reflexivity.
-Qed.
-
-
 
 
 #[local] Definition Vst (w : list ascii) : Type :=
