@@ -25,3 +25,6 @@ bench
 *.cmo
 *.cmx
 *.o
+
+# benchmark inputs (downloaded / generated; see bench_data/gen_large_int.py)
+bench_data/*.json
