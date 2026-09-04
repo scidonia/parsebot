@@ -2789,6 +2789,29 @@ Proof.
 Qed.
 
 
+(* Bridge: a Call NT_value denotation is a value_spec denotation (the inverse of
+   value_sound_call). *)
+Lemma value_complete_call (prefix w : list ascii) (v : Json) (j : nat) :
+  denote json_grammar (prefix ++ w) (Call NT_value) tt (List.length prefix) v tt j ->
+  denote json_grammar (prefix ++ w) value_spec tt (List.length prefix) v tt j.
+Proof.
+  intros H.
+  apply (fst (denote_call_iff ascii unit json_nt json_grammar (prefix ++ w) Json NT_value tt tt (List.length prefix) j v)) in H.
+  cbn [json_grammar] in H. exact H.
+Qed.
+
+(* A value's input is non-ws at the head, so skip_ws is a no-op on it. *)
+Lemma value_input_skip_ws (prefix w : list ascii) (v : Json) (j : nat) :
+  denote json_grammar (prefix ++ w) value_spec tt (List.length prefix) v tt j ->
+  skip_ws w = w.
+Proof.
+  intros Hd.
+  destruct w as [| c rest]; [reflexivity |].
+  unfold skip_ws.
+  destruct (is_wsb c) eqn:Ews; [| reflexivity].
+  exfalso. exact (value_no_ws prefix c rest v j Ews Hd).
+Qed.
+
 #[local] Definition Vst (w : list ascii) : Type :=
   forall (prefix : list ascii) (v : Json) (j : nat),
     denote json_grammar (prefix ++ w) value_spec tt (List.length prefix) v tt j ->
@@ -3700,129 +3723,37 @@ Proof.
           assert (Hskip_le : List.length (skip_ws w) <= List.length w) by (rewrite <- (ws_part_skip w) at 2; rewrite length_app; lia).
           lia. }
       destruct Hvalue as [fuelv [Hfv_le Hv]].
+      assert (Helem_c : forall (w' : list ascii), List.length w' <= List.length w -> forall (w'' : list ascii), List.length w'' < List.length w' -> forall (pre : list ascii) (val : Json) (jj : nat),
+        denote json_grammar (pre ++ w'') (Call NT_value) tt (List.length pre) val tt jj ->
+        (forall c : ascii, nth_error (pre ++ w'') jj = Some c -> is_digitb c = false) ->
+        parse_value (3 * List.length w'' + 1) (skip_ws w'') = Some (val, skipn jj (pre ++ w''))).
+      { intros w' Hle_w' w'' Hlt_w'' pre val jj hden hndigit.
+        pose proof (value_complete_call pre w'' val jj hden) as hval.
+        pose proof (value_input_skip_ws pre w'' val jj hval) as hskip.
+        destruct (fst (IH w'' (Nat.lt_le_trans (Datatypes.length w'') (Datatypes.length w') (Datatypes.length w) Hlt_w'' Hle_w')) pre val jj hval hndigit) as [hf [hhf_le hp]].
+        assert (hp' : parse_value hf (skip_ws w'') = Some (val, skipn jj (pre ++ w''))).
+        { exact (eq_ind_r (fun w0 : list ascii => parse_value hf w0 = Some (val, skipn jj (pre ++ w''))) hp hskip). }
+        apply (parse_value_mono hf (3 * List.length w'' + 1) (skip_ws w'') (val, skipn jj (pre ++ w''))).
+        - lia.
+        - exact hp'. }
       assert (Hfold : forall (w' : list ascii), List.length w' <= List.length w ->
         forall (prefix' : list ascii) (vs'0 : list Json) (j20 jclose : nat),
           denote json_grammar (prefix' ++ w') elements_rest_spec tt (List.length prefix') vs'0 tt j20 ->
           denote json_grammar (prefix' ++ w') ws tt j20 tt tt jclose ->
           nth_error (prefix' ++ w') jclose = Some "]"%char ->
           parse_elements_more (3 * List.length w' + 2) (skip_ws w') = Some (vs'0, skipn jclose (prefix' ++ w'))).
-      { apply (@well_founded_induction_type (list ascii) (fun x y : list ascii => List.length x < List.length y) wf_lt_length
-            (fun w' : list ascii => List.length w' <= List.length w ->
-              forall (prefix' : list ascii) (vs'0 : list Json) (j20 jclose : nat),
-                denote json_grammar (prefix' ++ w') elements_rest_spec tt (List.length prefix') vs'0 tt j20 ->
-                denote json_grammar (prefix' ++ w') ws tt j20 tt tt jclose ->
-                nth_error (prefix' ++ w') jclose = Some "]"%char ->
-                parse_elements_more (3 * List.length w' + 2) (skip_ws w') = Some (vs'0, skipn jclose (prefix' ++ w')))).
-        intros w' IHfold Hle_w' prefix' vs'0 j20 jclose Hmany0 Hws0 Hnth0.
-        unfold elements_rest_spec in Hmany0.
-        apply (fst (denote_many_iff ascii unit json_nt json_grammar (prefix' ++ w') Json (Map snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)))))) tt tt (List.length prefix') j20 vs'0)) in Hmany0.
-        destruct Hmany0 as [Hnil | Hcons].
-        - destruct Hnil as [[Evs0 _] Ej20]. subst vs'0. subst j20.
-          assert (Hnonws_close : forall c, nth_error (prefix' ++ w') jclose = Some c -> is_wsb c = false).
-          { intros c Hc. rewrite Hnth0 in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
-          pose proof (ws_skip_gen (prefix' ++ w') (List.length prefix') jclose Hws0 Hnonws_close) as Hskipm.
-          rewrite (skipn_length_app ascii prefix' w') in Hskipm.
-          replace (3 * List.length w' + 2) with (S (3 * List.length w' + 1)) by lia.
-          cbn [parse_elements_more]. rewrite Hskipm. rewrite (skipn_cons_head ascii (prefix' ++ w') jclose "]"%char Hnth0). reflexivity.
-        - destruct Hcons as [vv [vs'' [γr [jr [[Evs0 Hs_rest] Hmany_rest]]]]]. subst vs'0.
-          apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix' ++ w') (unit * Json) Json snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0))))) tt γr (List.length prefix') jr vv)) in Hs_rest.
-          destruct Hs_rest as [p [Evv Hseq]].
-          apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix' ++ w') unit Json (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)))) tt γr (List.length prefix') jr p)) in Hseq.
-          destruct Hseq as [γc [jc [a [b [[Ep Hcomma] Hrest_member]]]]].
-          apply (char_denote_nth (prefix' ++ w') ","%char (List.length prefix') jc a γc) in Hcomma.
-          destruct Hcomma as [Hnth_comma [Ea [Egc Ejc]]]. subst a. subst γc. subst jc.
-          rewrite Ep in Evv. simpl in Evv. subst vv.
-          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') unit Json ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0))) tt γr (S (List.length prefix')) jr b)) in Hrest_member.
-          destruct Hrest_member as [γmid [jcomma [u' [Hws_comma Hrest_member2]]]]. destruct u', γmid, γr.
-          simpl in Hrest_member2.
-          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') Json Json (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)) tt tt jcomma jr b)) in Hrest_member2.
-          destruct Hrest_member2 as [γv0 [jv0 [vv2 [Hcall2 Hrest3]]]]. destruct γv0.
-          apply (fst (denote_call_iff ascii unit json_nt json_grammar (prefix' ++ w') Json NT_value tt tt jcomma jv0 vv2)) in Hcall2.
-          cbn [json_grammar] in Hcall2.
-          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') unit Json ws (fun _ : unit => Pure vv2) tt tt jv0 jr b)) in Hrest3.
-          destruct Hrest3 as [γm3 [jm3 [u'' [Hws_after Hpure]]]]. destruct u'', γm3.
-          apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix' ++ w') Json vv2 tt jm3 b tt jr)) in Hpure.
-          destruct Hpure as [[Eb _] Ejr]. subst b. subst jr.
-          assert (Hjcomma_le : jcomma <= List.length (prefix' ++ w')).
-          { pose proof (denote_ge_json (prefix' ++ w') Json value_spec tt tt jcomma jv0 vv2 Hcall2) as Hg1.
-            pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jv0 jm3 tt Hws_after) as Hg2.
-            pose proof (denote_ge_json (prefix' ++ w') (list Json) elements_rest_spec tt tt jm3 j20 vs'' Hmany_rest) as Hg3.
-            pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt j20 jclose tt Hws0) as Hg4.
-            assert (Hjc_lt : jclose < List.length (prefix' ++ w')) by (apply (nth_error_Some (prefix' ++ w') jclose); rewrite Hnth0; discriminate).
-            lia. }
-          assert (Hjcomma_gt : List.length prefix' < jcomma).
-          { pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt (S (List.length prefix')) jcomma tt Hws_comma) as Hg. lia. }
-          assert (Hlt_v : List.length (skipn jcomma (prefix' ++ w')) < List.length w').
-          { rewrite (skipn_length jcomma (prefix' ++ w')). rewrite length_app. rewrite length_app in Hjcomma_le. lia. }
-          assert (Hcall2' : denote json_grammar (firstn jcomma (prefix' ++ w') ++ skipn jcomma (prefix' ++ w')) value_spec tt (List.length (firstn jcomma (prefix' ++ w'))) vv2 tt jv0).
-          { rewrite (firstn_skipn jcomma (prefix' ++ w')). rewrite firstn_length. rewrite (Nat.min_l jcomma (List.length (prefix' ++ w')) Hjcomma_le). exact Hcall2. }
-          assert (Hnodigit_v : forall c, nth_error (firstn jcomma (prefix' ++ w') ++ skipn jcomma (prefix' ++ w')) jv0 = Some c -> is_digitb c = false).
-          { intros c Hc. rewrite (firstn_skipn jcomma (prefix' ++ w')) in Hc.
-            destruct (Nat.lt_ge_cases jv0 jm3) as [Hlt03 | Hge03].
-            - pose proof (ws_head_char (prefix' ++ w') jv0 jm3 c Hws_after Hlt03 Hc) as Hwc. apply (ws_not_digit c Hwc).
-            - assert (Hjv0m3 : jv0 = jm3) by (pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jv0 jm3 tt Hws_after) as Hg; lia). subst jm3.
-              unfold elements_rest_spec in Hmany_rest.
-              apply (fst (denote_many_iff ascii unit json_nt json_grammar (prefix' ++ w') Json (Map snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)))))) tt tt jv0 j20 vs'')) in Hmany_rest.
-              destruct Hmany_rest as [Hnil | Hcons2].
-              + destruct Hnil as [[_ _] Ej20]. subst j20.
-                destruct (Nat.lt_ge_cases jv0 jclose) as [Hlt2 | Hge2].
-                * pose proof (ws_head_char (prefix' ++ w') jv0 jclose c Hws0 Hlt2 Hc) as Hwc. apply (ws_not_digit c Hwc).
-                * assert (Hjv0c : jv0 = jclose) by (pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jv0 jclose tt Hws0) as Hg; lia). subst jclose. rewrite Hnth0 in Hc. injection Hc as Hc'. subst c. simpl. reflexivity.
-              + destruct Hcons2 as [vv3 [vs''2 [γr2 [jr2 [[Evs2 Hs_rest2] _]]]]]. subst vs''.
-                apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix' ++ w') (unit * Json) Json snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0))))) tt γr2 jv0 jr2 vv3)) in Hs_rest2.
-                destruct Hs_rest2 as [p2 [_ Hseq2]].
-                apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix' ++ w') unit Json (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)))) tt γr2 jv0 jr2 p2)) in Hseq2.
-                destruct Hseq2 as [γc2 [jc2 [a2 [b2 [[_ Hcomma2] _]]]]].
-                apply (char_denote_nth (prefix' ++ w') ","%char jv0 jc2 a2 γc2) in Hcomma2.
-                destruct Hcomma2 as [Hnth_comma2 _].
-                rewrite Hnth_comma2 in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
-          destruct (fst (IH (skipn jcomma (prefix' ++ w')) (Nat.lt_le_trans _ _ _ Hlt_v Hle_w')) (firstn jcomma (prefix' ++ w')) vv2 jv0 Hcall2' Hnodigit_v) as [fuelv2 [Hfv2_le Hv2]].
-          rewrite (firstn_skipn jcomma (prefix' ++ w')) in Hv2.
-          assert (Hjm3_gt : List.length prefix' < jm3).
-          { pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jv0 jm3 tt Hws_after) as Hg1.
-            pose proof (denote_ge_json (prefix' ++ w') Json value_spec tt tt jcomma jv0 vv2 Hcall2) as Hg2.
-            lia. }
-          assert (Hlt_rec : List.length (skipn jm3 (prefix' ++ w')) < List.length w').
-          { rewrite (skipn_length jm3 (prefix' ++ w')). rewrite length_app. rewrite length_app in Hjcomma_le. assert (Hjm3_le : jm3 <= List.length (prefix' ++ w')) by (pose proof (denote_ge_json (prefix' ++ w') (list Json) elements_rest_spec tt tt jm3 j20 vs'' Hmany_rest) as Hg; pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt j20 jclose tt Hws0) as Hg0; assert (Hjc_lt : jclose < List.length (prefix' ++ w')) by (apply (nth_error_Some (prefix' ++ w') jclose); rewrite Hnth0; discriminate); lia). lia. }
-          assert (Hmany_rest' : denote json_grammar (firstn jm3 (prefix' ++ w') ++ skipn jm3 (prefix' ++ w')) elements_rest_spec tt (List.length (firstn jm3 (prefix' ++ w'))) vs'' tt j20).
-          { rewrite (firstn_skipn jm3 (prefix' ++ w')). rewrite firstn_length. assert (Hjm3_le2 : jm3 <= List.length (prefix' ++ w')) by (pose proof (denote_ge_json (prefix' ++ w') (list Json) elements_rest_spec tt tt jm3 j20 vs'' Hmany_rest) as Hg; pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt j20 jclose tt Hws0) as Hg0; assert (Hjc_lt : jclose < List.length (prefix' ++ w')) by (apply (nth_error_Some (prefix' ++ w') jclose); rewrite Hnth0; discriminate); lia). rewrite (Nat.min_l jm3 (List.length (prefix' ++ w')) Hjm3_le2). exact Hmany_rest. }
-          assert (Hws0' : denote json_grammar (firstn jm3 (prefix' ++ w') ++ skipn jm3 (prefix' ++ w')) ws tt j20 tt tt jclose).
-          { rewrite (firstn_skipn jm3 (prefix' ++ w')). exact Hws0. }
-          assert (Hnth0' : nth_error (firstn jm3 (prefix' ++ w') ++ skipn jm3 (prefix' ++ w')) jclose = Some "]"%char).
-          { rewrite (firstn_skipn jm3 (prefix' ++ w')). exact Hnth0. }
-          pose proof (IHfold (skipn jm3 (prefix' ++ w')) Hlt_rec (Nat.lt_le_incl _ _ (Nat.lt_le_trans _ _ _ Hlt_rec Hle_w')) (firstn jm3 (prefix' ++ w')) vs'' j20 jclose Hmany_rest' Hws0' Hnth0') as Hrec.
-          rewrite (firstn_skipn jm3 (prefix' ++ w')) in Hrec.
-          assert (Hrec_pad : parse_elements_more (3 * List.length w' + 1) (skip_ws (skipn jm3 (prefix' ++ w'))) = Some (vs'', skipn jclose (prefix' ++ w'))).
-          { apply (parse_elements_more_mono (3 * List.length (skipn jm3 (prefix' ++ w')) + 2) (3 * List.length w' + 1) (skip_ws (skipn jm3 (prefix' ++ w'))) (vs'', skipn jclose (prefix' ++ w'))).
-            - rewrite (skipn_length jm3 (prefix' ++ w')). rewrite length_app. lia.
-            - exact Hrec. }
-          assert (Hv2_pad : parse_value (3 * List.length w' + 1) (skipn jcomma (prefix' ++ w')) = Some (vv2, skipn jv0 (prefix' ++ w'))).
-          { apply (parse_value_mono fuelv2 (3 * List.length w' + 1) (skipn jcomma (prefix' ++ w')) (vv2, skipn jv0 (prefix' ++ w'))).
-            - lia.
-            - exact Hv2. }
-          assert (Hnws_val : forall c, nth_error (prefix' ++ w') jcomma = Some c -> is_wsb c = false).
-          { intros c Hc. destruct (is_wsb c) eqn:E; [| reflexivity].
-            exfalso. apply (value_no_ws (firstn jcomma (prefix' ++ w')) c (skipn (S jcomma) (prefix' ++ w')) vv2 jv0).
-            - exact E.
-            - replace (firstn jcomma (prefix' ++ w') ++ c :: skipn (S jcomma) (prefix' ++ w')) with (prefix' ++ w').
-              + replace (List.length (firstn jcomma (prefix' ++ w'))) with jcomma by (rewrite firstn_length; symmetry; apply Nat.min_l; exact Hjcomma_le).
-                exact Hcall2.
-              + rewrite <- (skipn_cons_head ascii (prefix' ++ w') jcomma c Hc). rewrite (firstn_skipn jcomma (prefix' ++ w')). reflexivity. }
-          pose proof (ws_skip_gen (prefix' ++ w') (S (List.length prefix')) jcomma Hws_comma Hnws_val) as Hskip_comma.
-          pose proof (skip_ws_ws (prefix' ++ w') jv0 jm3 Hws_after) as Hskip_after.
-          assert (Hskip_ws_w' : skip_ws w' = ","%char :: skipn (S (List.length prefix')) (prefix' ++ w')).
-          { assert (Hcomma_nw : is_wsb ","%char = false) by (vm_compute; reflexivity).
-            pose proof (skip_ws_nonws (prefix' ++ w') (List.length prefix') ","%char Hnth_comma Hcomma_nw) as Hsw.
-            rewrite <- (skipn_length_app ascii prefix' w') at 1.
-            exact (eq_trans Hsw (skipn_cons_head ascii (prefix' ++ w') (List.length prefix') ","%char Hnth_comma)). }
-          replace (3 * List.length w' + 2) with (S (3 * List.length w' + 1)) by lia.
-          cbn [parse_elements_more].
-          rewrite Hskip_ws_w'. cbn [parse_elements_more Ascii.eqb].
-          rewrite Hskip_comma. rewrite Hv2_pad.
-          cbn [parse_elements_more Ascii.eqb].
-          rewrite Hskip_after. rewrite Hrec_pad. cbn [parse_elements_more Ascii.eqb].
-          reflexivity.
-      }
+      { intros w' Hle_w' prefix' vs'0 j20 jclose Hmany Hws hnth0.
+        rewrite (parse_elements_more_equiv_sep_by (3 * List.length w' + 2) (skip_ws w')).
+        assert (Hcomma_nw : is_wsb ","%char = false) by (vm_compute; reflexivity).
+        assert (Hbracket_nw : is_wsb "]"%char = false) by (vm_compute; reflexivity).
+        assert (Hcomma_bracket : Ascii.eqb ","%char "]"%char = false) by (vm_compute; reflexivity).
+        assert (Hcomma_ndigit : is_digitb ","%char = false) by (vm_compute; reflexivity).
+        assert (Hbracket_ndigit : is_digitb "]"%char = false) by (vm_compute; reflexivity).
+        exact (sep_by_complete Json (Call NT_value) parse_value ","%char "]"%char
+          parse_value_mono
+          (fun pre w0 val jj hden => value_consumes pre w0 val jj (value_complete_call pre w0 val jj hden))
+          Hcomma_nw Hbracket_nw Hcomma_bracket Hcomma_ndigit Hbracket_ndigit
+          w' (Helem_c w' Hle_w') prefix' vs'0 j20 jclose Hmany Hws hnth0). }
       assert (Hjw_le : jw <= List.length (prefix ++ w)).
       { pose proof (denote_ge_json (prefix ++ w) (list Json) elements_rest_spec tt tt jw j2 vs' Hel_rest2) as Hg.
         pose proof (denote_ge_json (prefix ++ w) unit ws tt tt j2 j3 tt Hws2) as Hg0.
