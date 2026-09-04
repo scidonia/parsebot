@@ -546,6 +546,24 @@ with parse_elements_more (fuel : nat) (w : list ascii) : option ((list Json) * l
           else None
       end
   end.
+(* One member: string ws ":" ws value.  The input `w` is already ws-skipped by
+   the caller (`sep_by` passes `skip_ws rest`). *)
+Definition parse_member (fuel : nat) (w : list ascii) : option ((list ascii * Json) * list ascii) :=
+  match parse_string w with
+  | None => None
+  | Some (s, rest1) =>
+      match skip_ws rest1 with
+      | c' :: rest2 =>
+          if Ascii.eqb c' ":"%char then
+            match parse_value fuel (skip_ws rest2) with
+            | Some (v, rest3) => Some ((s, v), rest3)
+            | None => None
+            end
+          else None
+      | [] => None
+      end
+  end.
+
 
 (* Whole-document parse: skip leading ws, parse one value, require trailing
    whitespace only. *)
@@ -2721,6 +2739,24 @@ Proof.
     destruct (parse_value f (skip_ws rest)) as [[v rest1] |] eqn:Ev; [| reflexivity].
     rewrite IH. reflexivity.
 Qed.
+(* Same for members: `parse_members_more` is `sep_by` with `parse_member`. *)
+Lemma parse_members_more_equiv_sep_by : forall (fuel : nat) (w : list ascii),
+  parse_members_more fuel w = sep_by (list ascii * Json) parse_member ","%char "}"%char fuel w.
+Proof.
+  intros fuel w. revert w.
+  induction fuel as [| f IH]; intros w; simpl.
+  - reflexivity.
+  - destruct w as [| c rest]; [reflexivity |].
+    unfold parse_member.
+    destruct (Ascii.eqb c "}"%char) eqn:E1; [reflexivity |].
+    destruct (Ascii.eqb c ","%char) eqn:E2; [| reflexivity].
+    destruct (parse_string (skip_ws rest)) as [[s rest1] |] eqn:Es; [| reflexivity].
+    destruct (skip_ws rest1) as [| c' rest2] eqn:Ew; [reflexivity |].
+    destruct (Ascii.eqb c' ":"%char) eqn:E3; [| reflexivity].
+    destruct (parse_value f (skip_ws rest2)) as [[v rest3] |] eqn:Ev; [| reflexivity].
+    rewrite IH. reflexivity.
+Qed.
+
 
 
 
