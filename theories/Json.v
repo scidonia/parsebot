@@ -1179,6 +1179,22 @@ Proof.
 Qed.
 
 (* Mutual soundness of the seven recursive functions, by induction on fuel. *)
+#[local] Definition sound_7 (fuel : nat) : Type :=
+  (forall prefix w v rest, parse_value fuel w = Some (v, rest) ->
+      denote json_grammar (prefix ++ w) value_spec tt (List.length prefix) v tt (List.length prefix + List.length w - List.length rest))
+  * (forall prefix w ms rest, parse_object fuel w = Some (ms, rest) ->
+      denote json_grammar (prefix ++ w) object_body_spec tt (List.length prefix) ms tt (List.length prefix + List.length w - List.length rest))
+  * (forall prefix w vs rest, parse_array fuel w = Some (vs, rest) ->
+      denote json_grammar (prefix ++ w) array_body_spec tt (List.length prefix) vs tt (List.length prefix + List.length w - List.length rest))
+  * (forall prefix w ms rest, parse_members fuel w = Some (ms, rest) ->
+      denote json_grammar (prefix ++ w) members_spec tt (List.length prefix) ms tt (List.length prefix + List.length w - List.length rest))
+  * (forall prefix w ms rest, parse_members_more fuel w = Some (ms, rest) ->
+      denote json_grammar (prefix ++ w) members_rest_spec tt (List.length prefix) ms tt (List.length prefix + List.length w - List.length rest))
+  * (forall prefix w vs rest, parse_elements fuel w = Some (vs, rest) ->
+      denote json_grammar (prefix ++ w) elements_spec tt (List.length prefix) vs tt (List.length prefix + List.length w - List.length rest))
+  * (forall prefix w vs rest, parse_elements_more fuel w = Some (vs, rest) ->
+      denote json_grammar (prefix ++ w) elements_rest_spec tt (List.length prefix) vs tt (List.length prefix + List.length w - List.length rest)).
+
 Lemma parse_all_sound : forall fuel,
   (forall prefix w v rest, parse_value fuel w = Some (v, rest) ->
       denote json_grammar (prefix ++ w) value_spec tt (List.length prefix) v tt (List.length prefix + List.length w - List.length rest))
@@ -1195,11 +1211,13 @@ Lemma parse_all_sound : forall fuel,
   * (forall prefix w vs rest, parse_elements_more fuel w = Some (vs, rest) ->
       denote json_grammar (prefix ++ w) elements_rest_spec tt (List.length prefix) vs tt (List.length prefix + List.length w - List.length rest)).
 Proof.
-  induction fuel as [| fuel' IH]; simpl.
+  apply (@well_founded_induction_type nat lt lt_wf sound_7).
+  intros fuel IH.
+  destruct fuel as [| fuel']; simpl.
   - repeat split; intros; discriminate.
-  - destruct IH as [[[[[[IHv IHo] IHa] IHm] IHmm] IHe] IHem].
+  - destruct (IH fuel' (Nat.lt_succ_diag_r fuel')) as [[[[[[IHv IHo] IHa] IHm] IHmm] IHe] IHem].
     destruct (parse_all_shape fuel') as [[[[[[Sv So] Sa] Sm] Smm] Se] Sem].
-    repeat split; intros prefix w res rest Hparse.
+    repeat split; intros prefix w res rest Hparse; cbn [parse_value parse_object parse_array parse_members parse_members_more parse_elements parse_elements_more] in Hparse.
     + (* parse_value *)
       destruct w as [| c w']; [discriminate |].
       destruct (Ascii.eqb c "{"%char) eqn:Ebrace.
