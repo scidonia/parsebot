@@ -219,6 +219,99 @@ Fixpoint skip_ws (w : list ascii) : list ascii :=
   | c :: rest => if is_wsb c then skip_ws rest else w
   | [] => @nil ascii
   end.
+(* Generic tail-recursive repetition loop (worker/wrapper).
+   `sep_by` is the natural recursion; `sep_by_loop` is the tail-recursive
+   accumulator version that extracts to a loop.  Both parse `*( sep ws elem ws )`
+   followed by the `closer` char (consumed by the caller), e.g. `}` for members,
+   `]` for elements.  The loop accumulates the parsed elements reversed and
+   un-reverses them at the closer. *)
+Section SepBy.
+  Variable A : Type.
+  Variable elem : nat -> list ascii -> option (A * list ascii).
+  Variable sep closer : ascii.
+
+  Fixpoint sep_by (fuel : nat) (w : list ascii) : option (list A * list ascii) :=
+    match fuel with
+    | O => None
+    | S fuel' =>
+        match w with
+        | [] => None
+        | c :: rest =>
+            if Ascii.eqb c closer then Some (@nil A, w)
+            else if Ascii.eqb c sep then
+              match elem fuel' (skip_ws rest) with
+              | None => None
+              | Some (a, rest2) =>
+                  match sep_by fuel' (skip_ws rest2) with
+                  | None => None
+                  | Some (xs, rest3) => Some (a :: xs, rest3)
+                  end
+              end
+            else None
+        end
+    end.
+
+  Fixpoint sep_by_loop (fuel : nat) (acc : list A) (w : list ascii) : option (list A * list ascii) :=
+    match fuel with
+    | O => None
+    | S fuel' =>
+        match w with
+        | [] => None
+        | c :: rest =>
+            if Ascii.eqb c closer then Some (rev_append acc (@nil A), w)
+            else if Ascii.eqb c sep then
+              match elem fuel' (skip_ws rest) with
+              | None => None
+              | Some (a, rest2) => sep_by_loop fuel' (a :: acc) (skip_ws rest2)
+              end
+            else None
+        end
+    end.
+
+  Lemma sep_by_loop_equiv : forall (fuel : nat) (acc : list A) (w : list ascii),
+    sep_by_loop fuel acc w =
+    match sep_by fuel w with
+    | None => None
+    | Some (xs, rest) => Some (rev_append acc xs, rest)
+    end.
+  Proof.
+    intros fuel acc w. revert acc w.
+    induction fuel as [| fuel' IH]; intros acc w; simpl.
+    - reflexivity.
+    - destruct w as [| c rest]; [reflexivity |].
+      destruct (Ascii.eqb c closer) eqn:Ecl; [reflexivity |].
+      destruct (Ascii.eqb c sep) eqn:Esep; [| reflexivity].
+      destruct (elem fuel' (skip_ws rest)) as [e |] eqn:Ee; [| reflexivity].
+      destruct e as [a rest2].
+      rewrite IH.
+      destruct (sep_by fuel' (skip_ws rest2)) as [es |] eqn:Es; [| reflexivity].
+      destruct es as [xs rest3]. reflexivity.
+  Qed.
+  Hypothesis elem_mono : forall (fuel fuel' : nat) (w : list ascii) (r : A * list ascii),
+    fuel <= fuel' -> elem fuel w = Some r -> elem fuel' w = Some r.
+
+  Lemma sep_by_mono (fuel fuel' : nat) (w : list ascii) (r : list A * list ascii) :
+    fuel <= fuel' -> sep_by fuel w = Some r -> sep_by fuel' w = Some r.
+  Proof.
+    revert w r fuel'.
+    induction fuel as [| f IH]; intros w r fuel' Hle H.
+    { cbn [sep_by] in H. discriminate. }
+    destruct fuel' as [| f']; [lia |].
+    assert (Hle' : f <= f') by lia.
+    cbn [sep_by] in H.
+    destruct w as [| c rest]; cbn [sep_by] in H; try discriminate.
+    cbn [sep_by].
+    destruct (Ascii.eqb c closer) eqn:E1.
+    + exact H.
+    + destruct (Ascii.eqb c sep) eqn:E2.
+      * destruct (elem f (skip_ws rest)) as [[a rest2] |] eqn:Ee; try discriminate.
+        rewrite (elem_mono f f' (skip_ws rest) (a, rest2) Hle' Ee).
+        destruct (sep_by f (skip_ws rest2)) as [[xs rest3] |] eqn:Es; try discriminate.
+        rewrite (IH (skip_ws rest2) (xs, rest3) f' Hle' Es). cbn. exact H.
+      * discriminate.
+  Qed.
+
+End SepBy.
 
 (* Match a literal keyword; return the remaining input. *)
 Fixpoint parse_lit (s : string) (w : list ascii) : option (list ascii) :=
@@ -777,6 +870,40 @@ Qed.
 
 Lemma skip_ws_suffix (w : list ascii) : { pre : list ascii & pre ++ skip_ws w = w }.
 Proof. exists (ws_part w). apply ws_part_skip. Qed.
+(* The generic loop leaves a suffix of its input. *)
+Lemma sep_by_shape (A : Type) (elem_parser : nat -> list ascii -> option (A * list ascii)) (sep closer : ascii) :
+  (forall (fuel : nat) (w : list ascii) (a : A) (rest : list ascii),
+     elem_parser fuel w = Some (a, rest) -> { pre : list ascii & pre ++ rest = w }) ->
+  forall (fuel : nat) (w : list ascii) (xs : list A) (rest : list ascii),
+    sep_by A elem_parser sep closer fuel w = Some (xs, rest) -> { pre : list ascii & pre ++ rest = w }.
+Proof.
+  intros Helem_shape.
+  induction fuel as [| f IH]; intros w xs rest H.
+  - cbn [sep_by] in H. discriminate.
+  - cbn [sep_by] in H.
+    destruct w as [| c rest0]; [discriminate |].
+    destruct (Ascii.eqb c closer) eqn:Eclose.
+    + apply (Ascii.eqb_eq c closer) in Eclose. subst c.
+      simpl in H. injection H as Hxs Hrest. subst xs rest.
+      exists (@nil ascii). reflexivity.
+    + destruct (Ascii.eqb c sep) eqn:Esep; [| simpl in *; discriminate].
+      apply (Ascii.eqb_eq c sep) in Esep. subst c.
+      destruct (elem_parser f (skip_ws rest0)) as [[a rest1] |] eqn:Ee; [| simpl in *; discriminate].
+      destruct (sep_by A elem_parser sep closer f (skip_ws rest1)) as [[xs' rest2] |] eqn:Es; [| simpl in *; discriminate].
+      simpl in H. injection H as Hxs Hrest. subst xs rest.
+      destruct (Helem_shape f (skip_ws rest0) a rest1 Ee) as [X HX].
+      destruct (IH (skip_ws rest1) xs' rest2 Es) as [Y HY].
+      apply (suffix_compose (sep :: rest0) rest1 rest2).
+      + apply (suffix_compose (sep :: rest0) (skip_ws rest0) rest1).
+        * apply (suffix_compose (sep :: rest0) rest0 (skip_ws rest0)).
+          -- exists [sep]. reflexivity.
+          -- exact (skip_ws_suffix rest0).
+        * exact (existT _ X HX).
+      + apply (suffix_compose rest1 (skip_ws rest1) rest2).
+        * exact (skip_ws_suffix rest1).
+        * exact (existT _ Y HY).
+Qed.
+
 
 (* Leaf-parser shapes: the result is a suffix of the input. *)
 Lemma parse_lit_shape (s : string) (w rest : list ascii) :
@@ -2351,6 +2478,251 @@ Proof.
   rewrite <- (skipn_length_app ascii (ws_part (skipn i w)) (skip_ws (skipn i w))).
   f_equal. rewrite (ws_part_skip (skipn i w)). reflexivity.
 Qed.
+(* The one generic loop lemma: `sep_by A elem_parser sep closer` is complete for
+   `Many (Map snd (Seq (char sep) (Bind ws (Bind elem (Bind ws (Pure)))))`.
+   Instantiated once for members (`sep = ","`, `closer = "}"`) and once for
+   elements (`sep = ","`, `closer = "]"`), replacing the two hand-written
+   `Hfold`s in `complete_value_object_array`. *)
+Lemma sep_by_complete (A : Type) (elem : Spec ascii unit json_nt A)
+  (elem_parser : nat -> list ascii -> option (A * list ascii)) (sep closer : ascii) :
+  (forall (fuel fuel' : nat) (w : list ascii) (r : A * list ascii),
+     fuel <= fuel' -> elem_parser fuel w = Some r -> elem_parser fuel' w = Some r) ->
+  (forall (prefix w : list ascii) (a : A) (j : nat),
+     denote json_grammar (prefix ++ w) elem tt (List.length prefix) a tt j ->
+     List.length prefix < j) ->
+  is_wsb sep = false ->
+  is_wsb closer = false ->
+  Ascii.eqb sep closer = false ->
+  forall (w : list ascii),
+    (forall (w' : list ascii), List.length w' < List.length w -> forall (prefix : list ascii) (a : A) (j : nat),
+       denote json_grammar (prefix ++ w') elem tt (List.length prefix) a tt j ->
+       elem_parser (3 * List.length w' + 1) (skip_ws w') = Some (a, skipn j (prefix ++ w'))) ->
+    forall (prefix : list ascii) (xs : list A) (j jclose : nat),
+      denote json_grammar (prefix ++ w)
+        (Many (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a : A => Bind ws (fun _ : unit => Pure a)))))))
+        tt (List.length prefix) xs tt j ->
+      denote json_grammar (prefix ++ w) ws tt j tt tt jclose ->
+      nth_error (prefix ++ w) jclose = Some closer ->
+      sep_by A elem_parser sep closer (3 * List.length w + 2) (skip_ws w) = Some (xs, skipn jclose (prefix ++ w)).
+Proof.
+  intros Helem_mono Helem_cons Hsep_nw Hcloser_nw Hsep_closer.
+  apply (@well_founded_induction_type (list ascii) (fun x y : list ascii => List.length x < List.length y) wf_lt_length
+    (fun w : list ascii =>
+      (forall (w' : list ascii), List.length w' < List.length w -> forall (prefix : list ascii) (a : A) (j : nat),
+         denote json_grammar (prefix ++ w') elem tt (List.length prefix) a tt j ->
+         elem_parser (3 * List.length w' + 1) (skip_ws w') = Some (a, skipn j (prefix ++ w'))) ->
+      forall (prefix : list ascii) (xs : list A) (j jclose : nat),
+        denote json_grammar (prefix ++ w)
+          (Many (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a : A => Bind ws (fun _ : unit => Pure a)))))))
+          tt (List.length prefix) xs tt j ->
+        denote json_grammar (prefix ++ w) ws tt j tt tt jclose ->
+        nth_error (prefix ++ w) jclose = Some closer ->
+        sep_by A elem_parser sep closer (3 * List.length w + 2) (skip_ws w) = Some (xs, skipn jclose (prefix ++ w)))).
+  intros w IH Helem_c prefix xs j jclose Hmany Hws Hnth.
+  apply (fst (denote_many_iff ascii unit json_nt json_grammar (prefix ++ w) A
+    (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a : A => Bind ws (fun _ : unit => Pure a))))))
+    tt tt (List.length prefix) j xs)) in Hmany.
+  destruct Hmany as [Hnil | Hcons].
+  - (* no repetitions *)
+    destruct Hnil as [[Exs _] Ej]. subst xs. subst j.
+    assert (Hnonws : forall c : ascii, nth_error (prefix ++ w) jclose = Some c -> is_wsb c = false).
+    { intros c Hc. rewrite Hnth in Hc. injection Hc as Hc'. subst c. exact Hcloser_nw. }
+    pose proof (ws_skip prefix w jclose Hws Hnonws) as Hskip.
+    replace (3 * List.length w + 2) with (S (3 * List.length w + 1)) by lia.
+    cbn [sep_by].
+    rewrite Hskip. rewrite (skipn_cons_head ascii (prefix ++ w) jclose closer Hnth).
+    cbn [Ascii.eqb]. rewrite (proj2 (Ascii.eqb_eq closer closer) eq_refl). reflexivity.
+  - (* one or more repetitions *)
+    destruct Hcons as [a [xs' [γ'' [k [[Exs Hone] Htail]]]]]. subst xs.
+    apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * A) A snd
+      (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a0 : A => Bind ws (fun _ : unit => Pure a0)))))
+      tt γ'' (List.length prefix) k a)) in Hone.
+    destruct Hone as [p [Ea Hseq]].
+    apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit A (char sep)
+      (Bind ws (fun _ : unit => Bind elem (fun a0 : A => Bind ws (fun _ : unit => Pure a0))))
+      tt γ'' (List.length prefix) k p)) in Hseq.
+    destruct Hseq as [γc [jc [u [b [[Ep Hsep] Hrest]]]]].
+    apply (char_denote_nth (prefix ++ w) sep (List.length prefix) jc u γc) in Hsep.
+    destruct Hsep as [Hnth_sep [Eu [Egc Ejc]]]. subst u. subst γc. subst jc.
+    simpl in Ep. subst p. simpl in Ea. subst b.
+    apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit A ws
+      (fun _ : unit => Bind elem (fun a0 : A => Bind ws (fun _ : unit => Pure a0)))
+      tt γ'' (S (List.length prefix)) k a)) in Hrest.
+    destruct Hrest as [γm [jm [u2 [Hws_sep Hrest2]]]]. destruct u2, γm.
+    apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) A A elem
+      (fun a0 : A => Bind ws (fun _ : unit => Pure a0))
+      tt γ'' jm k a)) in Hrest2.
+    destruct Hrest2 as [γe [je [a0 [Helem Hws_after]]]]. destruct γe.
+    apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit A ws
+      (fun _ : unit => Pure a0) tt γ'' je k a)) in Hws_after.
+    destruct Hws_after as [γw2 [jw2 [u3 [Hws_mid Hpure]]]]. destruct u3, γw2.
+    apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix ++ w) A a0 tt jw2 a γ'' k)) in Hpure.
+    destruct Hpure as [[Ea0 Eg] Ej]. subst a. subst k. subst γ''.
+    (* now: Hnth_sep, Hws_sep (S(length prefix)..jm), Helem (jm..je, a0), Hws_mid (je..jw2),
+       Htail (jw2..j, xs'), Hws (j..jclose), Hnth (jclose, closer). *)
+    assert (Hjm_le : jm <= List.length (prefix ++ w)).
+    { pose proof (denote_ge_json (prefix ++ w) A elem tt tt jm je a0 Helem) as Hg1.
+      pose proof (denote_ge_json (prefix ++ w) unit ws tt tt je jw2 tt Hws_mid) as Hg2.
+      pose proof (denote_ge_json (prefix ++ w) (list A) (Many (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a1 : A => Bind ws (fun _ : unit => Pure a1))))))) tt tt jw2 j xs' Htail) as Hg3.
+      pose proof (denote_ge_json (prefix ++ w) unit ws tt tt j jclose tt Hws) as Hg4.
+      assert (Hjc_lt : jclose < List.length (prefix ++ w)) by (apply (nth_error_Some (prefix ++ w) jclose); rewrite Hnth; discriminate).
+      lia. }
+    (* the element parser succeeds on the first element *)
+    assert (Helem' : denote json_grammar (firstn jm (prefix ++ w) ++ skipn jm (prefix ++ w)) elem tt (List.length (firstn jm (prefix ++ w))) a0 tt je).
+    { rewrite (firstn_skipn jm (prefix ++ w)). rewrite firstn_length. rewrite (Nat.min_l jm (List.length (prefix ++ w)) Hjm_le). exact Helem. }
+    assert (Hlt_elem : List.length (skipn jm (prefix ++ w)) < List.length w).
+    { rewrite (skipn_length jm (prefix ++ w)). rewrite length_app. rewrite length_app in Hjm_le.
+      pose proof (denote_ge_json (prefix ++ w) unit ws tt tt (S (List.length prefix)) jm tt Hws_sep) as Hg.
+      lia. }
+    assert (Helem_parse : elem_parser (3 * List.length (skipn jm (prefix ++ w)) + 1) (skip_ws (skipn jm (prefix ++ w))) = Some (a0, skipn je (prefix ++ w))).
+    { pose proof (Helem_c (skipn jm (prefix ++ w)) Hlt_elem (firstn jm (prefix ++ w)) a0 je Helem') as Hh.
+      rewrite (firstn_skipn jm (prefix ++ w)) in Hh. exact Hh. }
+    (* pad the element parser's fuel up to 3*len + 1 *)
+    assert (Helem_pad : elem_parser (3 * List.length w + 1) (skip_ws (skipn jm (prefix ++ w))) = Some (a0, skipn je (prefix ++ w))).
+    { apply (Helem_mono (3 * List.length (skipn jm (prefix ++ w)) + 1) (3 * List.length w + 1) (skip_ws (skipn jm (prefix ++ w))) (a0, skipn je (prefix ++ w))).
+      - rewrite (skipn_length jm (prefix ++ w)). rewrite length_app.
+        pose proof (denote_ge_json (prefix ++ w) unit ws tt tt (S (List.length prefix)) jm tt Hws_sep) as Hg.
+        lia.
+      - exact Helem_parse. }
+    (* strict suffix for the recursion: the element consumes >= 1 char *)
+    assert (Hjm_lt_je : jm < je).
+    { pose proof (Helem_cons (firstn jm (prefix ++ w)) (skipn jm (prefix ++ w)) a0 je Helem') as Hh.
+      rewrite firstn_length in Hh. rewrite (Nat.min_l jm (List.length (prefix ++ w)) Hjm_le) in Hh. exact Hh. }
+    assert (Hlt_rec : List.length (skipn jw2 (prefix ++ w)) < List.length w).
+    { rewrite (skipn_length jw2 (prefix ++ w)). rewrite length_app. rewrite length_app in Hjm_le.
+      pose proof (denote_ge_json (prefix ++ w) unit ws tt tt (S (List.length prefix)) jm tt Hws_sep) as Hg1.
+      pose proof (denote_ge_json (prefix ++ w) unit ws tt tt je jw2 tt Hws_mid) as Hg2.
+      lia. }
+    (* re-shape the tail for the recursive call *)
+    assert (Htail' : denote json_grammar (firstn jw2 (prefix ++ w) ++ skipn jw2 (prefix ++ w))
+      (Many (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a1 : A => Bind ws (fun _ : unit => Pure a1)))))))
+      tt (List.length (firstn jw2 (prefix ++ w))) xs' tt j).
+    { rewrite (firstn_skipn jw2 (prefix ++ w)). rewrite firstn_length. rewrite (Nat.min_l jw2 (List.length (prefix ++ w))).
+      - exact Htail.
+      - pose proof (denote_ge_json (prefix ++ w) (list A) (Many (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a1 : A => Bind ws (fun _ : unit => Pure a1))))))) tt tt jw2 j xs' Htail) as Hg.
+        pose proof (denote_ge_json (prefix ++ w) unit ws tt tt j jclose tt Hws) as Hg0.
+        assert (Hjc_lt : jclose < List.length (prefix ++ w)) by (apply (nth_error_Some (prefix ++ w) jclose); rewrite Hnth; discriminate).
+        lia. }
+    assert (Hws' : denote json_grammar (firstn jw2 (prefix ++ w) ++ skipn jw2 (prefix ++ w)) ws tt j tt tt jclose).
+    { rewrite (firstn_skipn jw2 (prefix ++ w)). exact Hws. }
+    assert (Hnth' : nth_error (firstn jw2 (prefix ++ w) ++ skipn jw2 (prefix ++ w)) jclose = Some closer).
+    { rewrite (firstn_skipn jw2 (prefix ++ w)). exact Hnth. }
+    pose proof (IH (skipn jw2 (prefix ++ w)) Hlt_rec (fun w' Hlt => Helem_c w' (Nat.lt_trans (Datatypes.length w') (Datatypes.length (skipn jw2 (prefix ++ w))) (Datatypes.length w) Hlt Hlt_rec)) (firstn jw2 (prefix ++ w)) xs' j jclose Htail' Hws' Hnth') as Hrest_parse.
+    rewrite (firstn_skipn jw2 (prefix ++ w)) in Hrest_parse.
+    (* pad the recursive call's fuel up to 3*len + 1 *)
+    assert (Hrest_pad : sep_by A elem_parser sep closer (3 * List.length w + 1) (skip_ws (skipn jw2 (prefix ++ w))) = Some (xs', skipn jclose (prefix ++ w))).
+    { apply (sep_by_mono A elem_parser sep closer Helem_mono (3 * List.length (skipn jw2 (prefix ++ w)) + 2) (3 * List.length w + 1) (skip_ws (skipn jw2 (prefix ++ w))) (xs', skipn jclose (prefix ++ w))).
+      - rewrite (skipn_length jw2 (prefix ++ w)). rewrite length_app.
+        pose proof (denote_ge_json (prefix ++ w) unit ws tt tt (S (List.length prefix)) jm tt Hws_sep) as Hg1.
+        pose proof (denote_ge_json (prefix ++ w) unit ws tt tt je jw2 tt Hws_mid) as Hg2.
+        lia.
+      - exact Hrest_parse. }
+    (* ws after the element is maximal, so skip_ws (skipn je ...) = skip_ws (skipn jw2 ...) *)
+    pose proof (skip_ws_ws (prefix ++ w) je jw2 Hws_mid) as Hskip_mid.
+    pose proof (skip_ws_ws (prefix ++ w) (S (List.length prefix)) jm Hws_sep) as Hskip_sep_ws.
+    (* skip_ws w begins with the separator *)
+    assert (Hskip_sep : skip_ws w = sep :: skipn (S (List.length prefix)) (prefix ++ w)).
+    { rewrite <- (skipn_length_app ascii prefix w) at 1.
+      pose proof (skip_ws_nonws (prefix ++ w) (List.length prefix) sep Hnth_sep Hsep_nw) as Hsw.
+      rewrite Hsw.
+      rewrite (skipn_cons_head ascii (prefix ++ w) (List.length prefix) sep Hnth_sep).
+      reflexivity. }
+    replace (3 * List.length w + 2) with (S (3 * List.length w + 1)) by lia.
+    cbn [sep_by].
+    rewrite Hskip_sep. cbn [Ascii.eqb].
+    rewrite Hsep_closer. rewrite (proj2 (Ascii.eqb_eq sep sep) eq_refl).
+    cbn [sep_by].
+    rewrite Hskip_sep_ws. rewrite Helem_pad.
+    cbn [sep_by Ascii.eqb].
+    rewrite Hskip_mid. rewrite Hrest_pad.
+    cbn [Ascii.eqb]. reflexivity.
+Qed.
+(* The generic loop is sound for `Many (Map snd (Seq (char sep) (Bind ws
+   (Bind elem (Bind ws (Pure))))))`. Instantiated alongside `sep_by_complete`. *)
+Lemma sep_by_sound (A : Type) (elem : Spec ascii unit json_nt A)
+  (elem_parser : nat -> list ascii -> option (A * list ascii)) (sep closer : ascii) :
+  forall (fuel : nat),
+    (forall (fuel' : nat), fuel' < fuel -> forall (prefix w : list ascii) (a : A) (rest : list ascii),
+       elem_parser fuel' w = Some (a, rest) ->
+       denote json_grammar (prefix ++ w) elem tt (List.length prefix) a tt (List.length prefix + List.length w - List.length rest)) ->
+    (forall (fuel : nat) (w : list ascii) (a : A) (rest : list ascii),
+       elem_parser fuel w = Some (a, rest) -> { pre : list ascii & pre ++ rest = w }) ->
+    forall (prefix w : list ascii) (xs : list A) (rest : list ascii),
+      sep_by A elem_parser sep closer fuel w = Some (xs, rest) ->
+      denote json_grammar (prefix ++ w)
+        (Many (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a : A => Bind ws (fun _ : unit => Pure a)))))))
+        tt (List.length prefix) xs tt (List.length prefix + List.length w - List.length rest).
+Proof.
+  apply (@well_founded_induction_type nat lt lt_wf
+    (fun fuel : nat =>
+      (forall (fuel' : nat), fuel' < fuel -> forall (prefix w : list ascii) (a : A) (rest : list ascii),
+         elem_parser fuel' w = Some (a, rest) ->
+         denote json_grammar (prefix ++ w) elem tt (List.length prefix) a tt (List.length prefix + List.length w - List.length rest)) ->
+      (forall (fuel : nat) (w : list ascii) (a : A) (rest : list ascii),
+         elem_parser fuel w = Some (a, rest) -> { pre : list ascii & pre ++ rest = w }) ->
+      forall (prefix w : list ascii) (xs : list A) (rest : list ascii),
+        sep_by A elem_parser sep closer fuel w = Some (xs, rest) ->
+        denote json_grammar (prefix ++ w)
+          (Many (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a : A => Bind ws (fun _ : unit => Pure a)))))))
+          tt (List.length prefix) xs tt (List.length prefix + List.length w - List.length rest))).
+  intros fuel IH Hsnd Hshape prefix w xs rest H.
+  destruct fuel as [| f].
+  - cbn [sep_by] in H. discriminate.
+  - cbn [sep_by] in H.
+    destruct w as [| c rest0]; [discriminate |].
+    destruct (Ascii.eqb c closer) eqn:Eclose.
+    * apply (Ascii.eqb_eq c closer) in Eclose. subst c. simpl in H.
+      injection H as Hxs Hrest. subst xs rest.
+      replace (List.length prefix + List.length (closer :: rest0) - List.length (closer :: rest0)) with (List.length prefix) by (simpl; lia).
+      apply d_many_nil.
+    * destruct (Ascii.eqb c sep) eqn:Esep; [| simpl in *; discriminate].
+      apply (Ascii.eqb_eq c sep) in Esep. subst c.
+      destruct (elem_parser f (skip_ws rest0)) as [[a rest1] |] eqn:Ee; [| simpl in *; discriminate].
+      destruct (sep_by A elem_parser sep closer f (skip_ws rest1)) as [[xs' rest2] |] eqn:Es; [| simpl in *; discriminate].
+      simpl in H. injection H as Hxs Hrest. subst xs rest.
+      destruct (Hshape f (skip_ws rest0) a rest1 Ee) as [X HX].
+      apply d_many_cons with (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)).
+      apply d_map with (a := (tt, a)).
+      apply d_seq with (γ' := tt) (j := S (List.length prefix)).
+      -- apply (char_sound sep prefix rest0).
+      -- apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0)).
+         ++ replace (S (List.length prefix)) with (List.length (prefix ++ sep :: rest0) - List.length rest0) by (rewrite !length_app; simpl; lia).
+            apply (skip_ws_mid_sound (prefix ++ (sep :: rest0)) rest0).
+            exists (prefix ++ [sep]). rewrite <- app_assoc. simpl. reflexivity.
+         ++ apply d_bind with (a := a) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)).
+            -- replace (prefix ++ (sep :: rest0)) with ((prefix ++ [sep] ++ ws_part rest0) ++ skip_ws rest0) by (rewrite <- !app_assoc; rewrite ws_part_skip; reflexivity).
+               replace (S (List.length prefix) + List.length (ws_part rest0)) with (List.length (prefix ++ [sep] ++ ws_part rest0)) by (rewrite !length_app; simpl; lia).
+               replace (List.length (prefix ++ [sep] ++ ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)) with (List.length (prefix ++ [sep] ++ ws_part rest0) + List.length (skip_ws rest0) - List.length rest1) by (assert (Hle : List.length rest1 <= List.length (skip_ws rest0)) by (rewrite <- HX; rewrite length_app; lia); lia).
+               apply (Hsnd f (Nat.lt_succ_diag_r f) (prefix ++ [sep] ++ ws_part rest0) (skip_ws rest0) a rest1 Ee).
+            -- apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)).
+               ++ replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1)) with (List.length (prefix ++ (sep :: rest0)) - List.length rest1) by (rewrite !length_app; simpl; pose proof (length_ws_part_skip rest0) as Hl0; assert (Hle : List.length rest1 <= List.length (skip_ws rest0)) by (rewrite <- HX; rewrite length_app; lia); lia).
+                  apply (skip_ws_mid_sound (prefix ++ (sep :: rest0)) rest1).
+                  exists (prefix ++ [sep] ++ ws_part rest0 ++ X).
+                  rewrite <- !app_assoc. rewrite HX. rewrite (ws_part_skip rest0). simpl. reflexivity.
+               ++ apply d_pure.
+               ++ replace (S (List.length prefix) + List.length (ws_part rest0) + (List.length (skip_ws rest0) - List.length rest1) + List.length (ws_part rest1)) with (List.length (prefix ++ [sep] ++ ws_part rest0 ++ X ++ ws_part rest1)) by (rewrite !length_app; rewrite <- HX; rewrite length_app; simpl; lia).
+                  replace (List.length prefix + List.length (sep :: rest0) - List.length rest2) with (List.length (prefix ++ [sep] ++ ws_part rest0 ++ X ++ ws_part rest1) + List.length (skip_ws rest1) - List.length rest2) by (rewrite !length_app; simpl; assert (HXl : List.length X + List.length rest1 = List.length (skip_ws rest0)) by (rewrite <- HX; rewrite length_app; reflexivity); pose proof (length_ws_part_skip rest0) as Hl0; pose proof (length_ws_part_skip rest1) as Hl1; assert (Hle : List.length rest2 <= List.length (skip_ws rest1)) by (destruct (sep_by_shape A elem_parser sep closer Hshape f (skip_ws rest1) xs' rest2 Es) as [pre Hpre]; rewrite <- Hpre; rewrite length_app; lia); lia).
+                  assert (Heq : prefix ++ (sep :: rest0) = (prefix ++ [sep] ++ ws_part rest0 ++ X ++ ws_part rest1) ++ skip_ws rest1) by (rewrite <- !app_assoc; rewrite (ws_part_skip rest1); rewrite HX; rewrite (ws_part_skip rest0); simpl; reflexivity).
+                  rewrite Heq.
+                  apply (IH f (Nat.lt_succ_diag_r f) (fun fuel' Hlt => Hsnd fuel' (Nat.lt_trans fuel' f (S f) Hlt (Nat.lt_succ_diag_r f))) Hshape (prefix ++ [sep] ++ ws_part rest0 ++ X ++ ws_part rest1) (skip_ws rest1) xs' rest2 Es).
+Qed.
+
+(* The hand-written tail functions are extensionally the generic loop:
+   `parse_elements_more` is `sep_by` with the value parser as the element. *)
+Lemma parse_elements_more_equiv_sep_by : forall (fuel : nat) (w : list ascii),
+  parse_elements_more fuel w = sep_by Json parse_value ","%char "]"%char fuel w.
+Proof.
+  intros fuel w. revert w.
+  induction fuel as [| f IH]; intros w; simpl.
+  - reflexivity.
+  - destruct w as [| c rest]; [reflexivity |].
+    destruct (Ascii.eqb c "]"%char) eqn:E1; [reflexivity |].
+    destruct (Ascii.eqb c ","%char) eqn:E2; [| reflexivity].
+    destruct (parse_value f (skip_ws rest)) as [[v rest1] |] eqn:Ev; [| reflexivity].
+    rewrite IH. reflexivity.
+Qed.
+
+
 
 #[local] Definition Vst (w : list ascii) : Type :=
   forall (prefix : list ascii) (v : Json) (j : nat),
