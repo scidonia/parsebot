@@ -2615,9 +2615,12 @@ Lemma sep_by_complete (A : Type) (elem : Spec ascii unit json_nt A)
   is_wsb sep = false ->
   is_wsb closer = false ->
   Ascii.eqb sep closer = false ->
+  is_digitb sep = false ->
+  is_digitb closer = false ->
   forall (w : list ascii),
     (forall (w' : list ascii), List.length w' < List.length w -> forall (prefix : list ascii) (a : A) (j : nat),
        denote json_grammar (prefix ++ w') elem tt (List.length prefix) a tt j ->
+       (forall c : ascii, nth_error (prefix ++ w') j = Some c -> is_digitb c = false) ->
        elem_parser (3 * List.length w' + 1) (skip_ws w') = Some (a, skipn j (prefix ++ w'))) ->
     forall (prefix : list ascii) (xs : list A) (j jclose : nat),
       denote json_grammar (prefix ++ w)
@@ -2627,11 +2630,12 @@ Lemma sep_by_complete (A : Type) (elem : Spec ascii unit json_nt A)
       nth_error (prefix ++ w) jclose = Some closer ->
       sep_by A elem_parser sep closer (3 * List.length w + 2) (skip_ws w) = Some (xs, skipn jclose (prefix ++ w)).
 Proof.
-  intros Helem_mono Helem_cons Hsep_nw Hcloser_nw Hsep_closer.
+  intros Helem_mono Helem_cons Hsep_nw Hcloser_nw Hsep_closer Hsep_ndigit Hcloser_ndigit.
   apply (@well_founded_induction_type (list ascii) (fun x y : list ascii => List.length x < List.length y) wf_lt_length
     (fun w : list ascii =>
       (forall (w' : list ascii), List.length w' < List.length w -> forall (prefix : list ascii) (a : A) (j : nat),
          denote json_grammar (prefix ++ w') elem tt (List.length prefix) a tt j ->
+         (forall c : ascii, nth_error (prefix ++ w') j = Some c -> is_digitb c = false) ->
          elem_parser (3 * List.length w' + 1) (skip_ws w') = Some (a, skipn j (prefix ++ w'))) ->
       forall (prefix : list ascii) (xs : list A) (j jclose : nat),
         denote json_grammar (prefix ++ w)
@@ -2696,8 +2700,32 @@ Proof.
     { rewrite (skipn_length jm (prefix ++ w)). rewrite length_app. rewrite length_app in Hjm_le.
       pose proof (denote_ge_json (prefix ++ w) unit ws tt tt (S (List.length prefix)) jm tt Hws_sep) as Hg.
       lia. }
+    assert (Hnodigit_je : forall c : ascii, nth_error (firstn jm (prefix ++ w) ++ skipn jm (prefix ++ w)) je = Some c -> is_digitb c = false).
+    { intros c Hc. rewrite (firstn_skipn jm (prefix ++ w)) in Hc.
+      destruct (Nat.lt_ge_cases je jw2) as [Hlt | Hge].
+      - pose proof (ws_head_char (prefix ++ w) je jw2 c Hws_mid Hlt Hc) as Hwc. apply (ws_not_digit c Hwc).
+      - assert (Hjej : je = jw2) by (pose proof (denote_ge_json (prefix ++ w) unit ws tt tt je jw2 tt Hws_mid) as Hg; lia). subst jw2.
+        apply (fst (denote_many_iff ascii unit json_nt json_grammar (prefix ++ w) A
+          (Map snd (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a1 : A => Bind ws (fun _ : unit => Pure a1))))))
+          tt tt je j xs')) in Htail.
+        destruct Htail as [Hnil | Hcons2].
+        + destruct Hnil as [[_ _] Ej]. subst j.
+          destruct (Nat.lt_ge_cases je jclose) as [Hlt2 | Hge2].
+          * pose proof (ws_head_char (prefix ++ w) je jclose c Hws Hlt2 Hc) as Hwc. apply (ws_not_digit c Hwc).
+          * assert (Hjec : je = jclose) by (pose proof (denote_ge_json (prefix ++ w) unit ws tt tt je jclose tt Hws) as Hg; lia). subst jclose. rewrite Hnth in Hc. injection Hc as Hc'. subst c. exact Hcloser_ndigit.
+        + destruct Hcons2 as [a1 [xs'' [γr [jr [[_ Hs_rest] _]]]]].
+          apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * A) A snd
+            (Seq (char sep) (Bind ws (fun _ : unit => Bind elem (fun a2 : A => Bind ws (fun _ : unit => Pure a2)))))
+            tt γr je jr a1)) in Hs_rest.
+          destruct Hs_rest as [p2 [_ Hseq2]].
+          apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit A (char sep)
+            (Bind ws (fun _ : unit => Bind elem (fun a2 : A => Bind ws (fun _ : unit => Pure a2))))
+            tt γr je jr p2)) in Hseq2.
+          destruct Hseq2 as [γc2 [jc2 [u4 [b2 [[_ Hsep2] _]]]]].
+          apply (char_denote_nth (prefix ++ w) sep je jc2 u4 γc2) in Hsep2.
+          destruct Hsep2 as [Hnth_sep2 _]. rewrite Hnth_sep2 in Hc. injection Hc as Hc'. subst c. exact Hsep_ndigit. }
     assert (Helem_parse : elem_parser (3 * List.length (skipn jm (prefix ++ w)) + 1) (skip_ws (skipn jm (prefix ++ w))) = Some (a0, skipn je (prefix ++ w))).
-    { pose proof (Helem_c (skipn jm (prefix ++ w)) Hlt_elem (firstn jm (prefix ++ w)) a0 je Helem') as Hh.
+    { pose proof (Helem_c (skipn jm (prefix ++ w)) Hlt_elem (firstn jm (prefix ++ w)) a0 je Helem' Hnodigit_je) as Hh.
       rewrite (firstn_skipn jm (prefix ++ w)) in Hh. exact Hh. }
     (* pad the element parser's fuel up to 3*len + 1 *)
     assert (Helem_pad : elem_parser (3 * List.length w + 1) (skip_ws (skipn jm (prefix ++ w))) = Some (a0, skipn je (prefix ++ w))).
