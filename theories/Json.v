@@ -457,7 +457,7 @@ with parse_elements_more (fuel : nat) (w : list ascii) : option ((list Json) * l
 (* Whole-document parse: skip leading ws, parse one value, require trailing
    whitespace only. *)
 Definition parse_json (w : list ascii) : option Json :=
-  match parse_value (S (S (List.length w))) (skip_ws w) with
+  match parse_value (3 * List.length w + 2) (skip_ws w) with
   | Some (v, rest) => match skip_ws rest with [] => Some v | _ => None end
   | None => None
   end.
@@ -1374,13 +1374,13 @@ Lemma parse_json_sound (w : list ascii) (v : Json) :
 Proof.
   intros H.
   unfold parse_json in H.
-  destruct (parse_value (S (S (List.length w))) (skip_ws w)) as [[v' rest] |] eqn:Ev; [| discriminate].
+  destruct (parse_value (3 * List.length w + 2) (skip_ws w)) as [[v' rest] |] eqn:Ev; [| discriminate].
   destruct (skip_ws rest) as [| c tl] eqn:Eskip; [| discriminate].
   injection H as Hv. subst v.
   assert (Hws : ws_part rest = rest) by (symmetry; rewrite <- (ws_part_skip rest) at 1; rewrite Eskip; apply app_nil_r).
-  destruct (parse_all_shape (S (S (List.length w)))) as [[[[[[Sv _] _] _] _] _] _].
+  destruct (parse_all_shape (3 * List.length w + 2)) as [[[[[[Sv _] _] _] _] _] _].
   destruct (Sv (skip_ws w) v' rest Ev) as [pre Hpre].
-  destruct (parse_all_sound (S (S (List.length w)))) as [[[[[[IHv _] _] _] _] _] _].
+  destruct (parse_all_sound (3 * List.length w + 2)) as [[[[[[IHv _] _] _] _] _] _].
   unfold json_text.
   apply d_bind with (a := tt) (γ' := tt) (j := List.length (ws_part w)).
   ++ replace 0 with (List.length w - List.length w) by lia.
@@ -1398,6 +1398,2133 @@ Proof.
         ++ replace (List.length (ws_part w) + List.length (skip_ws w) - List.length rest + List.length (ws_part rest)) with (List.length w) by (pose proof (length_ws_part_skip w) as Hl; rewrite Hws; assert (Hle : List.length rest <= List.length (skip_ws w)) by (rewrite <- Hpre; rewrite length_app; lia); lia).
            apply d_pure.
 Qed.
+
+(* ------------------------------------------------------------------------- *)
+(* 14. Completeness: every denotation is accepted                            *)
+(* ------------------------------------------------------------------------- *)
+
+(* char x at the head of (prefix ++ c :: w) forces x = c. *)
+Lemma char_denote_eq (x c : ascii) (prefix w : list ascii) (a : unit) (γ' : unit) (j : nat) :
+  denote json_grammar (prefix ++ c :: w) (char x) tt (List.length prefix) a γ' j ->
+  x = c.
+Proof.
+  intros Hd. unfold char in Hd.
+  pose proof (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) ascii unit (fun _ : ascii => tt) (Tok (fun c' : ascii => c' = x)) tt γ' (List.length prefix) j a) Hd) as Hm.
+  destruct Hm as [t [Ea Htok]].
+  pose proof (fst (denote_tok_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (fun c' : ascii => c' = x) t tt γ' (List.length prefix) j) Htok) as Ht.
+  destruct Ht as [[[Eg Ej] Hnth] HP].
+  simpl in HP.
+  rewrite (nth_error_app_cons c prefix w) in Hnth. injection Hnth as Hct.
+  rewrite <- Hct in HP. exact (eq_sym HP).
+Qed.
+
+(* digit1-9 characters are not whitespace. *)
+Lemma digit_no_ws (c : ascii) : is_digit1_9b c = true -> is_wsb c = false.
+Proof.
+  unfold is_digit1_9b, is_wsb.
+  intro H.
+  repeat (apply orb_true_iff in H; destruct H as [H | H]).
+  all: apply Ascii.eqb_eq in H; subst c; compute; reflexivity.
+Qed.
+
+(* char x at the head of (prefix ++ c :: w): full positional info. *)
+Lemma char_denote_full (x c : ascii) (prefix w : list ascii) (a : unit) (γ' : unit) (j : nat) :
+  denote json_grammar (prefix ++ c :: w) (char x) tt (List.length prefix) a γ' j ->
+  x = c /\ a = tt /\ γ' = tt /\ j = S (List.length prefix).
+Proof.
+  intros Hd. unfold char in Hd.
+  pose proof (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) ascii unit (fun _ : ascii => tt) (Tok (fun c' : ascii => c' = x)) tt γ' (List.length prefix) j a) Hd) as Hm.
+  destruct Hm as [t [Ea Htok]].
+  pose proof (fst (denote_tok_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (fun c' : ascii => c' = x) t tt γ' (List.length prefix) j) Htok) as Ht.
+  destruct Ht as [[[Eg Ej] Hnth] HP].
+  rewrite (nth_error_app_cons c prefix w) in Hnth. injection Hnth as Hct.
+  rewrite <- Hct in HP.
+  split; [exact (eq_sym HP) | split; [exact Ea | split; [exact Eg | exact Ej]]].
+Qed.
+
+(* char x at an arbitrary position i in the full input w. *)
+Lemma char_denote_nth (w : list ascii) (x : ascii) (i j : nat) (a : unit) (γ' : unit) :
+  denote json_grammar w (char x) tt i a γ' j ->
+  nth_error w i = Some x /\ a = tt /\ γ' = tt /\ j = S i.
+Proof.
+  intros Hd. unfold char in Hd.
+  pose proof (fst (denote_map_iff ascii unit json_nt json_grammar w ascii unit (fun _ : ascii => tt) (Tok (fun c' : ascii => c' = x)) tt γ' i j a) Hd) as Hm.
+  destruct Hm as [t [Ea Htok]].
+  pose proof (fst (denote_tok_iff ascii unit json_nt json_grammar w (fun c' : ascii => c' = x) t tt γ' i j) Htok) as Ht.
+  destruct Ht as [[[Eg Ej] Hnth] HP].
+  rewrite HP in Hnth.
+  split; [exact Hnth | split; [exact Ea | split; [exact Eg | exact Ej]]].
+Qed.
+(* A value cannot start with a whitespace character. *)
+(* lit (String x s) at the head of (prefix ++ c :: w) forces x = c. *)
+Lemma lit_head (x : ascii) (s : string) (prefix w : list ascii) (c : ascii) (a : unit) (γ' : unit) (j : nat) :
+  denote json_grammar (prefix ++ c :: w) (lit (String x s)) tt (List.length prefix) a γ' j ->
+  x = c.
+Proof.
+  intros Hd. unfold lit in Hd.
+  apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char x) (lit s)) tt γ' (List.length prefix) j a)) in Hd.
+  destruct Hd as [p [Ea Hseq]].
+  apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ c :: w) unit unit (char x) (lit s) tt γ' (List.length prefix) j p)) in Hseq.
+  destruct Hseq as [γ1 [j1 [a1 [b1 [[E Hc] _]]]]].
+  exact (char_denote_eq x c prefix w a1 γ1 j1 Hc).
+Qed.
+
+(* Bind (char x) f at the head forces x = c. *)
+Lemma bind_char_head (x : ascii) (B : Type) (f : unit -> Spec ascii unit json_nt B) (prefix w : list ascii) (c : ascii) (b : B) (γ' : unit) (j : nat) :
+  denote json_grammar (prefix ++ c :: w) (Bind (char x) f) tt (List.length prefix) b γ' j ->
+  x = c.
+Proof.
+  intros Hd.
+  apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ c :: w) unit B (char x) f tt γ' (List.length prefix) j b)) in Hd.
+  destruct Hd as [γ1 [j1 [a [Hc _]]]].
+  exact (char_denote_eq x c prefix w a γ1 j1 Hc).
+Qed.
+
+(* number_spec cannot start with whitespace. *)
+Lemma number_no_ws (prefix w : list ascii) (c : ascii) (n : Z) (j : nat) :
+  is_wsb c = true ->
+  denote json_grammar (prefix ++ c :: w) number_spec tt (List.length prefix) n tt j -> False.
+Proof.
+  intros Hws Hd.
+  unfold number_spec in Hd.
+  apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ c :: w) bool Z (Alt (Map (fun _ : unit => true) (char "-"%char)) (Pure false)) (fun neg : bool => Map (fun n0 : nat => if neg then Z.opp (Z.of_nat n0) else Z.of_nat n0) int_spec) tt tt (List.length prefix) j n)) in Hd.
+  destruct Hd as [γ1 [j1 [neg [Hneg Hn]]]].
+  apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ c :: w) bool (Map (fun _ : unit => true) (char "-"%char)) (Pure false) tt γ1 (List.length prefix) j1 neg)) in Hneg.
+  destruct Hneg as [Hdash | Hfalse].
+  - apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) unit bool (fun _ : unit => true) (char "-"%char) tt γ1 (List.length prefix) j1 neg)) in Hdash.
+    destruct Hdash as [u [E Hc]].
+    apply (char_denote_eq "-"%char c prefix w u γ1 j1) in Hc. subst c. simpl in Hws. discriminate.
+  - apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix ++ c :: w) bool false tt (List.length prefix) neg γ1 j1)) in Hfalse.
+    destruct Hfalse as [[Eneg Eg] Ej]. subst neg.
+    apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) nat Z (fun n0 : nat => Z.of_nat n0) int_spec γ1 tt j1 j n)) in Hn.
+    destruct Hn as [n0 [En Hint]].
+    unfold int_spec in Hint.
+    apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ c :: w) nat (Map (fun _ : unit => 0) (char "0"%char)) (Map (fun p : ascii * list ascii => digits_to_nat (fst p :: snd p)) (Seq digit1_9_spec (Many digit_spec))) γ1 tt j1 j n0)) in Hint.
+    destruct Hint as [Hz | Hd1].
+    + apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) unit nat (fun _ : unit => 0) (char "0"%char) γ1 tt j1 j n0)) in Hz.
+      destruct Hz as [u [Ez Hc0]].
+      rewrite Eg in Hc0. rewrite Ej in Hc0.
+      apply (char_denote_eq "0"%char c prefix w u tt j) in Hc0. subst c. simpl in Hws. discriminate.
+    + apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (ascii * list ascii) nat (fun p : ascii * list ascii => digits_to_nat (fst p :: snd p)) (Seq digit1_9_spec (Many digit_spec)) γ1 tt j1 j n0)) in Hd1.
+      destruct Hd1 as [p [Ed Hseq]].
+      apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ c :: w) ascii (list ascii) digit1_9_spec (Many digit_spec) γ1 tt j1 j p)) in Hseq.
+      destruct Hseq as [γ2 [j2 [a2 [b2 [[Eseq Hd1'] _]]]]].
+      apply (fst (denote_tok_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (fun c' : ascii => is_digit1_9b c' = true) a2 γ1 γ2 j1 j2)) in Hd1'.
+      destruct Hd1' as [[[Egt Ejt] Hnth] HP].
+      rewrite Ej in Hnth. rewrite (nth_error_app_cons c prefix w) in Hnth. inversion Hnth. subst. simpl in HP.
+      rewrite (digit_no_ws a2 HP) in Hws. discriminate.
+Qed.
+
+(* A value cannot start with a whitespace character. *)
+Lemma value_no_ws (prefix : list ascii) (c : ascii) (w : list ascii) (v : Json) (j : nat) :
+  is_wsb c = true ->
+  denote json_grammar (prefix ++ c :: w) value_spec tt (List.length prefix) v tt j -> False.
+Proof.
+  intros Hws Hd.
+  unfold value_spec in Hd.
+  apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ c :: w) Json (Map (fun _ : unit => JNull) (lit "null")) _ tt tt (List.length prefix) j v)) in Hd.
+  destruct Hd as [Hd | Hd].
+  - apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) unit Json (fun _ : unit => JNull) (lit "null") tt tt (List.length prefix) j v)) in Hd.
+    destruct Hd as [unull [Enull Hlitnull]].
+    apply (lit_head "n"%char "ull" prefix w c unull tt j) in Hlitnull. subst c. simpl in Hws. discriminate.
+  - apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ c :: w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+    destruct Hd as [Hd | Hd].
+    + apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ c :: w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+      destruct Hd as [Hd | Hd].
+      * apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) bool Json (fun b : bool => JBool b) _ tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [bb [Ebool Hb0]].
+        apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ c :: w) bool _ _ tt tt (List.length prefix) j bb)) in Hb0.
+        destruct Hb0 as [Htrue0 | Hfalse0].
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) unit bool (fun _ : unit => true) (lit "true") tt tt (List.length prefix) j bb)) in Htrue0.
+           destruct Htrue0 as [utrue [Etrue Hlittrue]].
+           apply (lit_head "t"%char "rue" prefix w c utrue tt j) in Hlittrue. subst c. simpl in Hws. discriminate.
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) unit bool (fun _ : unit => false) (lit "false") tt tt (List.length prefix) j bb)) in Hfalse0.
+           destruct Hfalse0 as [ufalse [Efalse Hlitfalse]].
+           apply (lit_head "f"%char "alse" prefix w c ufalse tt j) in Hlitfalse. subst c. simpl in Hws. discriminate.
+      * apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (list ascii) Json JString string_spec tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [ss [Estr Hs0]].
+        apply (bind_char_head "034"%char (list ascii) (fun _ : unit => Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034"%char) (fun _ : unit => Pure cs))) prefix w c ss tt j) in Hs0.
+        subst c. simpl in Hws. discriminate.
+    + apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ c :: w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+      destruct Hd as [Hd | Hd].
+      * apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) Z Json JNumber number_spec tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [nn [Enum Hn0]]. subst v.
+        exact (number_no_ws prefix w c nn j Hws Hn0).
+      * apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ c :: w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [Hd | Hd].
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (list Json) Json JArray array_spec tt tt (List.length prefix) j v)) in Hd.
+           destruct Hd as [vv [Earr Ha0]].
+           apply (bind_char_head "091"%char (list Json) (fun _ : unit => Bind ws (fun _ : unit => Bind elements_spec (fun vs : list Json => Bind ws (fun _ : unit => Bind (char "093"%char) (fun _ : unit => Pure vs))))) prefix w c vv tt j) in Ha0.
+           subst c. simpl in Hws. discriminate.
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (list (list ascii * Json)) Json JObject object_spec tt tt (List.length prefix) j v)) in Hd.
+           destruct Hd as [mm [Eobj Ho0]].
+           apply (bind_char_head "123"%char (list (list ascii * Json)) (fun _ : unit => Bind ws (fun _ : unit => Bind members_spec (fun ms : list (list ascii * Json) => Bind ws (fun _ : unit => Bind (char "125"%char) (fun _ : unit => Pure ms))))) prefix w c mm tt j) in Ho0.
+           subst c. simpl in Hws. discriminate.
+Qed.
+
+(* A members/elements/rest derivation whose input begins with a whitespace
+   character is forced to the empty branch. *)
+Lemma members_ws_empty (prefix w : list ascii) (c : ascii) (ms : list (list ascii * Json)) (j : nat) :
+  is_wsb c = true ->
+  denote json_grammar (prefix ++ c :: w) members_spec tt (List.length prefix) ms tt j ->
+  ms = @nil (list ascii * Json) /\ j = List.length prefix.
+Proof.
+  intros Hws Hd. unfold members_spec in Hd.
+  apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (list (list ascii * Json)) (Pure (@nil (list ascii * Json))) _ tt tt (List.length prefix) j ms)) in Hd.
+  destruct Hd as [Hnil | Hcons].
+  - apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (list (list ascii * Json)) (@nil (list ascii * Json)) tt (List.length prefix) ms tt j)) in Hnil.
+    destruct Hnil as [[Ems Eg] Ej]. subst. split; reflexivity.
+  - apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (list ascii * Json) (list (list ascii * Json)) member_spec _ tt tt (List.length prefix) j ms)) in Hcons.
+    destruct Hcons as [γ1 [j1 [m [Hmem _]]]].
+    unfold member_spec in Hmem.
+    apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (list ascii) (list ascii * Json) string_spec _ tt γ1 (List.length prefix) j1 m)) in Hmem.
+    destruct Hmem as [γ2 [j2 [s [Hs _]]]].
+    apply (bind_char_head "034"%char (list ascii) (fun _ : unit => Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034"%char) (fun _ : unit => Pure cs))) prefix w c s γ2 j2) in Hs.
+    subst c. simpl in Hws. discriminate.
+Qed.
+
+Lemma members_rest_ws_empty (prefix w : list ascii) (c : ascii) (ms : list (list ascii * Json)) (j : nat) :
+  is_wsb c = true ->
+  denote json_grammar (prefix ++ c :: w) members_rest_spec tt (List.length prefix) ms tt j ->
+  ms = @nil (list ascii * Json) /\ j = List.length prefix.
+Proof.
+  intros Hws Hd. unfold members_rest_spec in Hd.
+  apply (fst (denote_many_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (list ascii * Json) (Map snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind member_spec (fun m : list ascii * Json => Bind ws (fun _ : unit => Pure m)))))) tt tt (List.length prefix) j ms)) in Hd.
+  destruct Hd as [Hnil | Hcons].
+  - destruct Hnil as [[Ems Eg] Ej]. subst. split; reflexivity.
+  - destruct Hcons as [a [as' [γ' [k [[_ Hone] _]]]]].
+    apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (unit * (list ascii * Json)) (list ascii * Json) snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind member_spec (fun m : list ascii * Json => Bind ws (fun _ : unit => Pure m))))) tt γ' (List.length prefix) k a)) in Hone.
+    destruct Hone as [x [E Hseq]].
+    apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ c :: w) unit (list ascii * Json) (char ","%char) (Bind ws (fun _ : unit => Bind member_spec (fun m : list ascii * Json => Bind ws (fun _ : unit => Pure m)))) tt γ' (List.length prefix) k x)) in Hseq.
+    destruct Hseq as [γ1 [j1 [a1 [b1 [[_ Hc] _]]]]].
+    apply (char_denote_eq ","%char c prefix w a1 γ1 j1) in Hc. subst c. simpl in Hws. discriminate.
+Qed.
+
+Lemma elements_ws_empty (prefix w : list ascii) (c : ascii) (vs : list Json) (j : nat) :
+  is_wsb c = true ->
+  denote json_grammar (prefix ++ c :: w) elements_spec tt (List.length prefix) vs tt j ->
+  vs = @nil Json /\ j = List.length prefix.
+Proof.
+  intros Hws Hd. unfold elements_spec in Hd.
+  apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (list Json) (Pure (@nil Json)) _ tt tt (List.length prefix) j vs)) in Hd.
+  destruct Hd as [Hnil | Hcons].
+  - apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (list Json) (@nil Json) tt (List.length prefix) vs tt j)) in Hnil.
+    destruct Hnil as [[Evs Eg] Ej]. subst. split; reflexivity.
+  - apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ c :: w) Json (list Json) (Call NT_value) _ tt tt (List.length prefix) j vs)) in Hcons.
+    destruct Hcons as [γ1 [j1 [v [Hv _]]]].
+    apply (fst (denote_call_iff ascii unit json_nt json_grammar (prefix ++ c :: w) Json NT_value tt γ1 (List.length prefix) j1 v)) in Hv.
+    cbn [json_grammar] in Hv. destruct γ1. exfalso. exact (value_no_ws prefix c w v j1 Hws Hv).
+Qed.
+
+Lemma elements_rest_ws_empty (prefix w : list ascii) (c : ascii) (vs : list Json) (j : nat) :
+  is_wsb c = true ->
+  denote json_grammar (prefix ++ c :: w) elements_rest_spec tt (List.length prefix) vs tt j ->
+  vs = @nil Json /\ j = List.length prefix.
+Proof.
+  intros Hws Hd. unfold elements_rest_spec in Hd.
+  apply (fst (denote_many_iff ascii unit json_nt json_grammar (prefix ++ c :: w) Json (Map snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v : Json => Bind ws (fun _ : unit => Pure v)))))) tt tt (List.length prefix) j vs)) in Hd.
+  destruct Hd as [Hnil | Hcons].
+  - destruct Hnil as [[Evs Eg] Ej]. subst. split; reflexivity.
+  - destruct Hcons as [a [as' [γ' [k [[_ Hone] _]]]]].
+    apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ c :: w) (unit * Json) Json snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v : Json => Bind ws (fun _ : unit => Pure v))))) tt γ' (List.length prefix) k a)) in Hone.
+    destruct Hone as [x [E Hseq]].
+    apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ c :: w) unit Json (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v : Json => Bind ws (fun _ : unit => Pure v)))) tt γ' (List.length prefix) k x)) in Hseq.
+    destruct Hseq as [γ1 [j1 [a1 [b1 [[_ Hc] _]]]]].
+    apply (char_denote_eq ","%char c prefix w a1 γ1 j1) in Hc. subst c. simpl in Hws. discriminate.
+Qed.
+
+Lemma nth_error_self_none (w : list ascii) : nth_error w (List.length w) = None.
+Proof. induction w; simpl; [reflexivity | exact IHw]. Qed.
+(* Leaf parser completeness: a denotation of a literal forces parse_lit to
+   succeed. *)
+Transparent parse_lit.
+
+Lemma skipn_length_app (A : Type) (l m : list A) : skipn (List.length l) (l ++ m) = m.
+Proof.
+  induction l; simpl; [reflexivity | exact IHl].
+Qed.
+
+Lemma parse_lit_complete (s : string) (prefix w : list ascii) (j : nat) :
+  denote json_grammar (prefix ++ w) (lit s) tt (List.length prefix) tt tt j ->
+  parse_lit s w = Some (skipn j (prefix ++ w)).
+Proof.
+  revert prefix w j. induction s as [| c s' IH]; intros prefix w j Hd.
+  - apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix ++ w) unit tt tt (List.length prefix) tt tt j)) in Hd.
+    destruct Hd as [[_ _] Ej]. subst j. simpl. rewrite (skipn_length_app ascii prefix w). reflexivity.
+  - simpl in Hd.
+    apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char c) (lit s')) tt tt (List.length prefix) j tt)) in Hd.
+    destruct Hd as [p [Emap Hseq]].
+    apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char c) (lit s') tt tt (List.length prefix) j p)) in Hseq.
+    destruct Hseq as [γ1 [j1 [a [b [[Eseq Hc] Hl]]]]].
+    destruct w as [| c' rest].
+    + rewrite app_nil_r in Hc. unfold char in Hc.
+      apply (fst (denote_map_iff ascii unit json_nt json_grammar prefix ascii unit (fun _ : ascii => tt) (Tok (fun x : ascii => x = c)) tt γ1 (List.length prefix) j1 a)) in Hc.
+      destruct Hc as [t [Emap2 Htok]].
+      apply (fst (denote_tok_iff ascii unit json_nt json_grammar prefix (fun x : ascii => x = c) t tt γ1 (List.length prefix) j1)) in Htok.
+      destruct Htok as [[[Eg Ej] Hnth] HP].
+      rewrite (nth_error_self_none prefix) in Hnth. discriminate.
+    + apply (char_denote_full c c' prefix rest a γ1 j1) in Hc.
+      destruct Hc as [Ecc [Ea [Eg Ej]]]. subst c. subst γ1. subst j1. destruct b.
+      replace (prefix ++ c' :: rest) with ((prefix ++ [c']) ++ rest) in Hl by (rewrite <- app_assoc; simpl; reflexivity).
+      replace (S (List.length prefix)) with (List.length (prefix ++ [c'])) in Hl by (rewrite length_app; simpl; lia).
+      simpl. destruct (Ascii.eqb c' c') eqn:E.
+      * simpl. rewrite (IH (prefix ++ [c']) rest j Hl).
+        replace (prefix ++ c' :: rest) with ((prefix ++ [c']) ++ rest) by (rewrite <- app_assoc; simpl; reflexivity).
+        reflexivity.
+      * exfalso. assert (Ht : Ascii.eqb c' c' = true) by apply Ascii.eqb_refl. rewrite Ht in E. discriminate.
+Qed.
+
+Transparent parse_value parse_object parse_array parse_members parse_members_more parse_elements parse_elements_more.
+
+Transparent parse_string_chars parse_string.
+
+Lemma skipn_cons_head (A : Type) (w : list A) (i : nat) (c : A) :
+  nth_error w i = Some c -> skipn i w = c :: skipn (S i) w.
+Proof.
+  revert w. induction i as [| i' IH]; intros w H.
+  - destruct w as [| c' rest]; simpl in *; [discriminate |].
+    injection H as Hc. subst c'. reflexivity.
+  - destruct w as [| c' rest]; simpl in *; [discriminate |].
+    apply IH. exact H.
+Qed.
+
+Lemma skipn_prefix_cons (prefix rest : list ascii) (c : ascii) :
+  skipn (S (List.length prefix)) (prefix ++ c :: rest) = rest.
+Proof.
+  induction prefix as [| p ps IH]; simpl; [reflexivity | exact IH].
+Qed.
+Lemma parse_string_chars_complete (w : list ascii) (i j : nat) (cs : list ascii) :
+  denote json_grammar w (Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034"%char) (fun _ : unit => Pure cs))) tt i cs tt j ->
+  parse_string_chars (skipn i w) = Some (cs, skipn j w).
+Proof.
+  revert w i j. induction cs as [| c cs' IH]; intros w i j Hd.
+  - apply (fst (denote_bind_iff ascii unit json_nt json_grammar w (list ascii) (list ascii) (Many string_char_spec) (fun cs : list ascii => Bind (char "034"%char) (fun _ : unit => Pure cs)) tt tt i j (@nil ascii))) in Hd.
+    destruct Hd as [γ1 [j1 [a [Hmany Hclose]]]].
+    apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii string_char_spec tt γ1 i j1 a)) in Hmany.
+    destruct Hmany as [Hnil | Hcons].
+    + destruct Hnil as [[Ea Eg] Ej]. subst a γ1 j1.
+      apply (fst (denote_bind_iff ascii unit json_nt json_grammar w unit (list ascii) (char "034"%char) (fun _ : unit => Pure (@nil ascii)) tt tt i j (@nil ascii))) in Hclose.
+      destruct Hclose as [γ2 [j2 [u [Hq Hpure]]]].
+      apply (char_denote_nth w "034"%char i j2 u γ2) in Hq.
+      destruct Hq as [Hnth [Ea2 [Eg2 Ej2]]]. subst u γ2 j2.
+      apply (fst (denote_pure_iff ascii unit json_nt json_grammar w (list ascii) (@nil ascii) tt (S i) (@nil ascii) tt j)) in Hpure.
+      destruct Hpure as [[_ _] Ej]. subst j.
+      rewrite (skipn_cons_head ascii w i "034"%char Hnth). simpl. reflexivity.
+    + destruct Hcons as [x [as' [γ'' [k [[E _] _]]]]].
+      apply (fst (denote_bind_iff ascii unit json_nt json_grammar w unit (list ascii) (char "034"%char) (fun _ : unit => Pure a) γ1 tt j1 j (@nil ascii))) in Hclose.
+      destruct Hclose as [γ2 [j2 [u [Hq Hpure]]]].
+      apply (fst (denote_pure_iff ascii unit json_nt json_grammar w (list ascii) a γ2 j2 (@nil ascii) tt j)) in Hpure.
+      destruct Hpure as [[Ea2 Eg2] Ej2]. subst a. discriminate.
+  - apply (fst (denote_bind_iff ascii unit json_nt json_grammar w (list ascii) (list ascii) (Many string_char_spec) (fun cs : list ascii => Bind (char "034"%char) (fun _ : unit => Pure cs)) tt tt i j (c :: cs'))) in Hd.
+    destruct Hd as [γ1 [j1 [a [Hmany Hclose]]]].
+    apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii string_char_spec tt γ1 i j1 a)) in Hmany.
+    destruct Hmany as [Hnil | Hcons].
+    + destruct Hnil as [[Ea Eg] Ej].
+      apply (fst (denote_bind_iff ascii unit json_nt json_grammar w unit (list ascii) (char "034"%char) (fun _ : unit => Pure a) γ1 tt j1 j (c :: cs'))) in Hclose.
+      destruct Hclose as [γ2 [j2 [u [Hq Hpure]]]].
+      apply (fst (denote_pure_iff ascii unit json_nt json_grammar w (list ascii) a γ2 j2 (c :: cs') tt j)) in Hpure.
+      destruct Hpure as [[Ea2 Eg2] Ej2]. subst a. discriminate.
+    + destruct Hcons as [x [as' [γ'' [k [[E Hone] Htail]]]]].
+      apply (fst (denote_bind_iff ascii unit json_nt json_grammar w unit (list ascii) (char "034"%char) (fun _ : unit => Pure a) γ1 tt j1 j (c :: cs'))) in Hclose.
+      destruct Hclose as [γ2 [j2 [u [Hquote Hpure]]]].
+      apply (fst (denote_pure_iff ascii unit json_nt json_grammar w (list ascii) a γ2 j2 (c :: cs') tt j)) in Hpure.
+      destruct Hpure as [[Epp Egp] Ejp].
+      subst a. inversion Epp. subst x as' γ2 j2. destruct u.
+      apply (fst (denote_tok_iff ascii unit json_nt json_grammar w (fun c0 : ascii => is_string_charb c0 = true) c tt γ'' i k)) in Hone.
+      destruct Hone as [[[Eg2 Ej2] Hnth] HP].
+      subst γ''. subst k.
+      assert (Htail' : denote json_grammar w (Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034"%char) (fun _ : unit => Pure cs))) tt (S i) cs' tt j).
+      { apply (d_bind ascii unit json_nt json_grammar w (list ascii) (list ascii) (Many string_char_spec) (fun cs : list ascii => Bind (char "034"%char) (fun _ : unit => Pure cs)) tt γ1 tt (S i) j1 j cs' cs' Htail).
+        apply (d_bind ascii unit json_nt json_grammar w unit (list ascii) (char "034"%char) (fun _ : unit => Pure cs') γ1 tt tt j1 j j tt cs' Hquote).
+        apply (d_pure ascii unit json_nt json_grammar w (list ascii) cs' tt j). }
+      specialize (IH w (S i) j Htail') as Hr.
+      rewrite (skipn_cons_head ascii w i c Hnth).
+
+      simpl.
+      destruct (Ascii.eqb c "034"%char) eqn:E.
+      * exfalso. simpl in HP.
+        unfold is_string_charb in HP. apply Ascii.eqb_eq in E. subst c. simpl in HP. discriminate.
+      * simpl. destruct (is_string_charb c) eqn:Ec.
+        -- simpl in Hr. rewrite Hr. reflexivity.
+        -- discriminate.
+Qed.
+
+Lemma parse_string_complete (prefix w : list ascii) (s : list ascii) (j : nat) :
+  denote json_grammar (prefix ++ w) string_spec tt (List.length prefix) s tt j ->
+  parse_string w = Some (s, skipn j (prefix ++ w)).
+Proof.
+  intros Hd. unfold string_spec in Hd.
+  apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list ascii) (char "034"%char) (fun _ : unit => Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034"%char) (fun _ : unit => Pure cs))) tt tt (List.length prefix) j s)) in Hd.
+  destruct Hd as [γ1 [j1 [u [Hq Hbody]]]].
+  destruct w as [| c0 rest].
+  - rewrite (app_nil_r prefix) in Hq. apply (char_denote_nth prefix "034"%char (List.length prefix) j1 u γ1) in Hq.
+    destruct Hq as [Hnth _]. rewrite (nth_error_self_none prefix) in Hnth. discriminate.
+  - apply (char_denote_full "034"%char c0 prefix rest u γ1 j1) in Hq.
+    destruct Hq as [E [Ea [Eg Ej]]]. subst c0. subst u. subst γ1. subst j1.
+    specialize (parse_string_chars_complete (prefix ++ "034"%char :: rest) (S (List.length prefix)) j s Hbody) as Hsc.
+    rewrite (skipn_prefix_cons prefix rest "034"%char) in Hsc.
+    unfold parse_string. simpl. exact Hsc.
+Qed.
+
+(** Completeness for the digit-run leaf: `take_digits` (maximal run) agrees with
+    a `Many digit_spec` denotation *provided the next position is not a digit*.
+    That proviso is exactly what the trailing `ws`/`,`/`]`/`}` context supplies
+    at every call site, so the greedy parser and the non-deterministic spec
+    agree on the value. *)
+
+Lemma nth_error_skipn_head (w : list ascii) (i : nat) :
+  nth_error (skipn i w) 0 = nth_error w i.
+Proof.
+  revert w. induction i as [| i' IH]; intros w.
+  - reflexivity.
+  - destruct w as [| c rest]; simpl; [reflexivity | exact (IH rest)].
+Qed.
+
+Lemma take_digits_none (w : list ascii) :
+  (forall c : ascii, nth_error w 0 = Some c -> is_digitb c = false) ->
+  take_digits w = (@nil ascii, w).
+Proof.
+  induction w as [| c rest IH]; intros Hnd; simpl.
+  - reflexivity.
+  - assert (Hc : is_digitb c = false) by (apply Hnd; reflexivity).
+    rewrite Hc. reflexivity.
+Qed.
+
+Lemma take_digits_complete (w : list ascii) (i j : nat) (ds : list ascii) :
+  denote json_grammar w (Many digit_spec) tt i ds tt j ->
+  (forall c : ascii, nth_error w j = Some c -> is_digitb c = false) ->
+  take_digits (skipn i w) = (ds, skipn j w).
+Proof.
+  revert w i j. induction ds as [| d ds' IH]; intros w i j Hd Hnd.
+  - apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii digit_spec tt tt i j (@nil ascii))) in Hd.
+    destruct Hd as [Hnil | Hcons].
+    + destruct Hnil as [[_ Eg] Ej]. subst.
+      apply take_digits_none. intros c Hc.
+      rewrite nth_error_skipn_head in Hc. eapply Hnd. exact Hc.
+    + destruct Hcons as [a [as' [γ'' [k [[E _] _]]]]]. discriminate.
+  - apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii digit_spec tt tt i j (d :: ds'))) in Hd.
+    destruct Hd as [Hnil | Hcons].
+    + destruct Hnil as [[E _] _]. discriminate.
+    + destruct Hcons as [a [as' [γ'' [k [[E Hone] Htail]]]]].
+      injection E as Ea Eas'. subst a as'.
+      unfold digit_spec in Hone.
+      apply (fst (denote_tok_iff ascii unit json_nt json_grammar w (fun c : ascii => is_digitb c = true) d tt γ'' i k)) in Hone.
+      destruct Hone as [[[Eg Ej] Hnth] HP].
+      subst γ''. subst k.
+      specialize (IH w (S i) j Htail Hnd).
+      rewrite (skipn_cons_head ascii w i d Hnth).
+      cbn [take_digits]. rewrite HP.
+      destruct (take_digits (skipn (S i) w)) as [ds1 rest1] eqn:Etd.
+      simpl. rewrite IH in Etd. congruence.
+Qed.
+
+(* char x at the head of `w` (input `prefix ++ w`): exposes the head and the
+   position of the following input. *)
+Lemma char_head_cons (x : ascii) (prefix w : list ascii) (u : unit) (γ' : unit) (j : nat) :
+  denote json_grammar (prefix ++ w) (char x) tt (List.length prefix) u γ' j ->
+  { rest : list ascii & w = x :: rest /\ γ' = tt /\ j = S (List.length prefix) }.
+Proof.
+  intros Hd.
+  apply (char_denote_nth (prefix ++ w) x (List.length prefix) j u γ') in Hd.
+  destruct Hd as [Hnth [_ [Eg Ej]]].
+  destruct w as [| c rest].
+  - rewrite app_nil_r in Hnth. rewrite (nth_error_self_none prefix) in Hnth. discriminate.
+  - rewrite (nth_error_app_cons c prefix rest) in Hnth. injection Hnth as Hcx. subst c.
+    exists rest. split; [reflexivity | split; [exact Eg | exact Ej]].
+Qed.
+
+Lemma nth_error_app_cons2 (x : ascii) (prefix rest : list ascii) :
+  nth_error (prefix ++ x :: rest) (S (List.length prefix)) = nth_error rest 0.
+Proof.
+  induction prefix as [| p ps IH]; simpl; [reflexivity | exact IH].
+Qed.
+
+Lemma skipn_prefix_cons2 (prefix rest : list ascii) (a b : ascii) :
+  skipn (S (S (List.length prefix))) (prefix ++ a :: b :: rest) = rest.
+Proof.
+  induction prefix as [| p ps IH]; simpl; [reflexivity | exact IH].
+Qed.
+
+(** Number leaf completeness: a `number_spec` denotation whose next position
+    is not a digit forces `parse_number` to succeed with exactly that value
+    and the corresponding remaining input. *)
+Transparent parse_number take_digits.
+Lemma parse_number_complete (prefix w : list ascii) (n : Z) (j : nat) :
+  denote json_grammar (prefix ++ w) number_spec tt (List.length prefix) n tt j ->
+  (forall c : ascii, nth_error (prefix ++ w) j = Some c -> is_digitb c = false) ->
+  parse_number w = Some (n, skipn j (prefix ++ w)).
+Proof.
+  intros Hd Hnd. unfold number_spec in Hd.
+  apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) bool Z
+    (Alt (Map (fun _ : unit => true) (char "-"%char)) (Pure false))
+    (fun neg : bool => Map (fun n0 : nat => if neg then Z.opp (Z.of_nat n0) else Z.of_nat n0) int_spec)
+    tt tt (List.length prefix) j n)) in Hd.
+  destruct Hd as [γ1 [j1 [neg [Hneg Hn]]]].
+  apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) bool
+    (Map (fun _ : unit => true) (char "-"%char)) (Pure false) tt γ1 (List.length prefix) j1 neg)) in Hneg.
+  destruct Hneg as [Hdash | Hfalse].
+  - (* ---------- negative ---------- *)
+    apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit bool
+      (fun _ : unit => true) (char "-"%char) tt γ1 (List.length prefix) j1 neg)) in Hdash.
+    destruct Hdash as [u [Eneg Hc]].
+    subst neg.
+    apply (char_head_cons "-"%char prefix w u γ1 j1) in Hc.
+    destruct Hc as [rest1 [Ew [Eg Ej]]]. subst γ1. subst j1. subst w.
+    apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ "-"%char :: rest1) nat Z
+      (fun n0 : nat => Z.opp (Z.of_nat n0)) int_spec tt tt (S (List.length prefix)) j n)) in Hn.
+    destruct Hn as [n0 [En Hint]].
+    unfold int_spec in Hint.
+    apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ "-"%char :: rest1) nat
+      (Map (fun _ : unit => 0) (char "0"%char))
+      (Map (fun p : ascii * list ascii => digits_to_nat (fst p :: snd p)) (Seq digit1_9_spec (Many digit_spec)))
+      tt tt (S (List.length prefix)) j n0)) in Hint.
+    destruct Hint as [Hz | Hd1].
+    + (* -0 *)
+      apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ "-"%char :: rest1) unit nat
+        (fun _ : unit => 0) (char "0"%char) tt tt (S (List.length prefix)) j n0)) in Hz.
+      destruct Hz as [u0 [Ez Hc0]].
+      replace (prefix ++ "-"%char :: rest1) with ((prefix ++ ["-"%char]) ++ rest1) in Hc0 by (rewrite <- app_assoc; simpl; reflexivity).
+      replace (S (List.length prefix)) with (List.length (prefix ++ ["-"%char])) in Hc0 by (rewrite length_app; simpl; lia).
+      apply (char_head_cons "0"%char (prefix ++ ["-"%char]) rest1 u0 tt j) in Hc0.
+      destruct Hc0 as [rest0 [Ew0 [Eg0 Ej0]]]. subst rest1. subst j.
+      replace (List.length (prefix ++ ["-"%char])) with (S (List.length prefix)) by (rewrite length_app; simpl; lia).
+      subst n0. simpl in En. subst n.
+      rewrite (skipn_prefix_cons2 prefix rest0 "-"%char "0"%char).
+      unfold parse_number. simpl.
+      destruct (Ascii.eqb "0"%char "0"%char) eqn:E00.
+      * simpl. reflexivity.
+      * exfalso. assert (Ht : Ascii.eqb "0"%char "0"%char = true) by apply Ascii.eqb_refl. rewrite Ht in E00. discriminate.
+    + (* - digit1-9 ... *)
+      apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ "-"%char :: rest1) (ascii * list ascii) nat
+        (fun p : ascii * list ascii => digits_to_nat (fst p :: snd p))
+        (Seq digit1_9_spec (Many digit_spec)) tt tt (S (List.length prefix)) j n0)) in Hd1.
+      destruct Hd1 as [p [En0 Hseq]].
+      apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ "-"%char :: rest1) ascii (list ascii)
+        digit1_9_spec (Many digit_spec) tt tt (S (List.length prefix)) j p)) in Hseq.
+      destruct Hseq as [γ2 [j2 [d [ds [[Ep Hd1'] Hmany]]]]].
+      subst p. simpl in En0.
+      unfold digit1_9_spec in Hd1'.
+      apply (fst (denote_tok_iff ascii unit json_nt json_grammar (prefix ++ "-"%char :: rest1)
+        (fun c : ascii => is_digit1_9b c = true) d tt γ2 (S (List.length prefix)) j2)) in Hd1'.
+      destruct Hd1' as [[[Egt Ejt] Hnth] HP].
+      subst γ2. subst j2.
+      rewrite (nth_error_app_cons2 "-"%char prefix rest1) in Hnth.
+      destruct rest1 as [| d' rest1']; [simpl in Hnth; discriminate | simpl in Hnth; injection Hnth as Hdd; subst d'].
+      pose proof (take_digits_complete (prefix ++ "-"%char :: d :: rest1') (S (S (List.length prefix))) j ds Hmany Hnd) as Htd.
+      rewrite (skipn_prefix_cons2 prefix rest1' "-"%char d) in Htd.
+      subst n0. simpl in En. subst n.
+      unfold parse_number. simpl.
+      destruct (Ascii.eqb d "0"%char) eqn:E0.
+      * exfalso. apply Ascii.eqb_eq in E0. subst d. simpl in HP. discriminate.
+      * destruct (is_digit1_9b d) eqn:E19.
+        -- rewrite Htd. simpl. reflexivity.
+        -- discriminate.
+  - (* ---------- non-negative ---------- *)
+    apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix ++ w) bool false tt (List.length prefix) neg γ1 j1)) in Hfalse.
+    destruct Hfalse as [[Eneg Eg] Ej]. subst neg. subst γ1. subst j1.
+    apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) nat Z
+      (fun n0 : nat => Z.of_nat n0) int_spec tt tt (List.length prefix) j n)) in Hn.
+    destruct Hn as [n0 [En Hint]].
+    unfold int_spec in Hint.
+    apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) nat
+      (Map (fun _ : unit => 0) (char "0"%char))
+      (Map (fun p : ascii * list ascii => digits_to_nat (fst p :: snd p)) (Seq digit1_9_spec (Many digit_spec)))
+      tt tt (List.length prefix) j n0)) in Hint.
+    destruct Hint as [Hz | Hd1].
+    + (* 0 *)
+      apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit nat
+        (fun _ : unit => 0) (char "0"%char) tt tt (List.length prefix) j n0)) in Hz.
+      destruct Hz as [u0 [Ez Hc0]].
+      apply (char_head_cons "0"%char prefix w u0 tt j) in Hc0.
+      destruct Hc0 as [rest0 [Ew0 [Eg0 Ej0]]]. subst w. subst j.
+      subst n0. simpl in En. subst n.
+      rewrite (skipn_prefix_cons prefix rest0 "0"%char).
+      unfold parse_number. simpl.
+      destruct (Ascii.eqb "0"%char "-"%char) eqn:E0m.
+      * exfalso. apply Ascii.eqb_eq in E0m. discriminate.
+      * simpl. destruct (Ascii.eqb "0"%char "0"%char) eqn:E00.
+        -- simpl. reflexivity.
+        -- exfalso. assert (Ht : Ascii.eqb "0"%char "0"%char = true) by apply Ascii.eqb_refl. rewrite Ht in E00. discriminate.
+    + (* digit1-9 ... *)
+      apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (ascii * list ascii) nat
+        (fun p : ascii * list ascii => digits_to_nat (fst p :: snd p))
+        (Seq digit1_9_spec (Many digit_spec)) tt tt (List.length prefix) j n0)) in Hd1.
+      destruct Hd1 as [p [En0 Hseq]].
+      apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) ascii (list ascii)
+        digit1_9_spec (Many digit_spec) tt tt (List.length prefix) j p)) in Hseq.
+      destruct Hseq as [γ2 [j2 [d [ds [[Ep Hd1'] Hmany]]]]].
+      subst p. simpl in En0.
+      unfold digit1_9_spec in Hd1'.
+      apply (fst (denote_tok_iff ascii unit json_nt json_grammar (prefix ++ w)
+        (fun c : ascii => is_digit1_9b c = true) d tt γ2 (List.length prefix) j2)) in Hd1'.
+      destruct Hd1' as [[[Egt Ejt] Hnth] HP].
+      subst γ2. subst j2.
+      destruct w as [| d' rest0].
+      - rewrite app_nil_r in Hnth. rewrite (nth_error_self_none prefix) in Hnth. discriminate.
+      - rewrite (nth_error_app_cons d' prefix rest0) in Hnth. injection Hnth as Hdd. subst d'.
+      pose proof (take_digits_complete (prefix ++ d :: rest0) (S (List.length prefix)) j ds Hmany Hnd) as Htd.
+      rewrite (skipn_prefix_cons prefix rest0 d) in Htd.
+      subst n0. simpl in En. subst n.
+      unfold parse_number. simpl.
+      destruct (Ascii.eqb d "-"%char) eqn:E0m.
+      * exfalso. apply Ascii.eqb_eq in E0m. subst d. simpl in HP. discriminate.
+      * simpl. destruct (Ascii.eqb d "0"%char) eqn:E0.
+        -- exfalso. apply Ascii.eqb_eq in E0. subst d. simpl in HP. discriminate.
+        -- destruct (is_digit1_9b d) eqn:E19.
+           ++ rewrite Htd. simpl. reflexivity.
+           ++ discriminate.
+Qed.
+
+(* ------------------------------------------------------------------------- *)
+(* Mutual completeness: value / object / array, well-founded on input length.  *)
+(* ------------------------------------------------------------------------- *)
+
+Lemma wf_lt_length : well_founded (fun (w w' : list ascii) => List.length w < List.length w').
+Proof.
+  intro w. remember (List.length w) as n eqn:Hn.
+  revert w Hn. induction n as [n IH] using (well_founded_induction lt_wf).
+  intros w Hn. constructor. intros w' Hlt.
+  rewrite <- Hn in Hlt. apply (IH (List.length w') Hlt w' eq_refl).
+Qed.
+
+Lemma digit1_9_digit (c : ascii) : is_digit1_9b c = true -> is_digitb c = true.
+Proof.
+  unfold is_digitb, is_digit1_9b. intro H.
+  destruct (Ascii.eqb c "0") eqn:E0.
+  - simpl. reflexivity.
+  - simpl. exact H.
+Qed.
+
+Lemma number_head (prefix w : list ascii) (n : Z) (j : nat) :
+  denote json_grammar (prefix ++ w) number_spec tt (List.length prefix) n tt j ->
+  { c : ascii & { rest : list ascii & w = c :: rest /\ (is_digitb c || Ascii.eqb c "-")%bool = true } }.
+Proof.
+  intros Hd. unfold number_spec in Hd.
+  apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) bool Z (Alt (Map (fun _ : unit => true) (char "-")) (Pure false)) (fun neg : bool => Map (fun n0 : nat => if neg then Z.opp (Z.of_nat n0) else Z.of_nat n0) int_spec) tt tt (List.length prefix) j n)) in Hd.
+  destruct Hd as [γ1 [j1 [neg [Hneg Hn]]]].
+  apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) bool (Map (fun _ : unit => true) (char "-")) (Pure false) tt γ1 (List.length prefix) j1 neg)) in Hneg.
+  destruct Hneg as [Hdash | Hfalse].
+  - apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit bool (fun _ : unit => true) (char "-") tt γ1 (List.length prefix) j1 neg)) in Hdash.
+    destruct Hdash as [u [E Hc]].
+    apply (char_head_cons "-"%char prefix w u γ1 j1) in Hc.
+    destruct Hc as [rest [Ew [Eg Ej]]]. subst γ1. subst j1. destruct u.
+    exists "-"%char, rest. split; [exact Ew | simpl; reflexivity].
+  - apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix ++ w) bool false tt (List.length prefix) neg γ1 j1)) in Hfalse.
+    destruct Hfalse as [[Eneg Eg] Ej]. subst neg. subst γ1. subst j1.
+    apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) nat Z (fun n0 : nat => Z.of_nat n0) int_spec tt tt (List.length prefix) j n)) in Hn.
+    destruct Hn as [n0 [En Hint]].
+    unfold int_spec in Hint.
+    apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) nat (Map (fun _ : unit => 0) (char "0")) (Map (fun p : ascii * list ascii => digits_to_nat (fst p :: snd p)) (Seq digit1_9_spec (Many digit_spec))) tt tt (List.length prefix) j n0)) in Hint.
+    destruct Hint as [Hz | Hd1].
+    + apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit nat (fun _ : unit => 0) (char "0") tt tt (List.length prefix) j n0)) in Hz.
+      destruct Hz as [u0 [Ez Hc0]].
+      apply (char_head_cons "0"%char prefix w u0 tt j) in Hc0.
+      destruct Hc0 as [rest [Ew [Eg Ej]]]. subst j. destruct u0.
+      exists "0"%char, rest. split; [exact Ew | simpl; reflexivity].
+    + apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (ascii * list ascii) nat (fun p : ascii * list ascii => digits_to_nat (fst p :: snd p)) (Seq digit1_9_spec (Many digit_spec)) tt tt (List.length prefix) j n0)) in Hd1.
+      destruct Hd1 as [p [En0 Hseq]].
+      apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) ascii (list ascii) digit1_9_spec (Many digit_spec) tt tt (List.length prefix) j p)) in Hseq.
+      destruct Hseq as [γ2 [j2 [d [ds [[_ Hd1'] _]]]]].
+      unfold digit1_9_spec in Hd1'.
+      apply (fst (denote_tok_iff ascii unit json_nt json_grammar (prefix ++ w) (fun c : ascii => is_digit1_9b c = true) d tt γ2 (List.length prefix) j2)) in Hd1'.
+      destruct Hd1' as [[[Egt Ejt] Hnth] HP].
+      subst γ2. subst j2.
+      destruct w as [| d' rest]; [rewrite app_nil_r in Hnth; rewrite (nth_error_self_none prefix) in Hnth; discriminate | rewrite (nth_error_app_cons d' prefix rest) in Hnth; injection Hnth as Hdd; subst d'].
+      exists d, rest. split; [reflexivity |].
+      simpl. rewrite (digit1_9_digit d HP). reflexivity.
+Qed.
+
+Opaque parse_number.
+Lemma parse_value_digit (c : ascii) (rest : list ascii) (n : Z) (r : list ascii) :
+  (is_digitb c || Ascii.eqb c "-")%bool = true ->
+  parse_number (c :: rest) = Some (n, r) ->
+  parse_value 1 (c :: rest) = Some (JNumber n, r).
+Proof.
+  intros Hdigit Hnum. unfold parse_value. simpl.
+  destruct (Ascii.eqb c "{") eqn:E1.
+  - exfalso. apply Ascii.eqb_eq in E1. subst c. simpl in Hdigit. discriminate.
+  - simpl. destruct (Ascii.eqb c "[") eqn:E2.
+    + exfalso. apply Ascii.eqb_eq in E2. subst c. simpl in Hdigit. discriminate.
+    + simpl. destruct (Ascii.eqb c "034") eqn:E3.
+      * exfalso. apply Ascii.eqb_eq in E3. subst c. simpl in Hdigit. discriminate.
+      * simpl. destruct (Ascii.eqb c "t") eqn:E4.
+        -- exfalso. apply Ascii.eqb_eq in E4. subst c. simpl in Hdigit. discriminate.
+        -- simpl. destruct (Ascii.eqb c "f") eqn:E5.
+           ++ exfalso. apply Ascii.eqb_eq in E5. subst c. simpl in Hdigit. discriminate.
+           ++ simpl. destruct (Ascii.eqb c "n") eqn:E6.
+              ** exfalso. apply Ascii.eqb_eq in E6. subst c. simpl in Hdigit. discriminate.
+              ** simpl. rewrite Hdigit. rewrite Hnum. simpl. reflexivity.
+Qed.
+Transparent parse_number.
+
+Lemma denote_ge_json (w : list ascii) (A : Type) (s : Spec ascii unit json_nt A) (γ γ' : unit) (i j : nat) (a : A) :
+  denote json_grammar w s γ i a γ' j -> i <= j.
+Proof.
+  intros d. induction d; simpl; lia.
+Qed.
+
+
+Lemma ws_not_digit (c : ascii) : is_wsb c = true -> is_digitb c = false.
+Proof.
+  unfold is_wsb, is_digitb. intro H.
+  apply Bool.orb_prop in H. destruct H as [H | H].
+  - apply Bool.orb_prop in H. destruct H as [H | H].
+    + apply Bool.orb_prop in H. destruct H as [H | H].
+      * apply Ascii.eqb_eq in H. subst c. reflexivity.
+      * apply Ascii.eqb_eq in H. subst c. reflexivity.
+    + apply Ascii.eqb_eq in H. subst c. reflexivity.
+  - apply Ascii.eqb_eq in H. subst c. reflexivity.
+Qed.
+
+Lemma ws_head_char (w : list ascii) (i j : nat) (c : ascii) :
+  denote json_grammar w ws tt i tt tt j ->
+  i < j ->
+  nth_error w i = Some c -> is_wsb c = true.
+Proof.
+  intros Hd Hlt Hnth. unfold ws in Hd.
+  apply (fst (denote_map_iff ascii unit json_nt json_grammar w (list ascii) unit (fun _ : list ascii => tt) (Many (Tok (fun c : ascii => is_wsb c = true))) tt tt i j tt)) in Hd.
+  destruct Hd as [wsl [_ Hmany]].
+  destruct wsl as [| c0 wsl].
+  - apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii (Tok (fun c : ascii => is_wsb c = true)) tt tt i j (@nil ascii))) in Hmany.
+    destruct Hmany as [Hnil | Hcons].
+    + destruct Hnil as [[_ _] Ej]. subst. lia.
+    + destruct Hcons as [a [as' [γ'' [k [[E _] _]]]]]. discriminate.
+  - apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii (Tok (fun c : ascii => is_wsb c = true)) tt tt i j (c0 :: wsl))) in Hmany.
+    destruct Hmany as [Hnil | Hcons].
+    + destruct Hnil as [[E _] _]. discriminate.
+    + destruct Hcons as [a [as' [γ'' [k [[E Hone] _]]]]].
+      injection E as Ea Eas. subst a as'.
+      apply (fst (denote_tok_iff ascii unit json_nt json_grammar w (fun c : ascii => is_wsb c = true) c0 tt γ'' i k)) in Hone.
+      destruct Hone as [[[_ _] Hnth'] HP].
+      rewrite Hnth' in Hnth. injection Hnth as Hc. subst c0. exact HP.
+Qed.
+Lemma skip_ws_nonws (w : list ascii) (i : nat) (c : ascii) :
+  nth_error w i = Some c -> is_wsb c = false -> skip_ws (skipn i w) = skipn i w.
+Proof.
+  intros Hnth Hnw.
+  rewrite (skipn_cons_head ascii w i c Hnth).
+  unfold skip_ws, ws_part. cbn. rewrite Hnw. reflexivity.
+Qed.
+
+Lemma ws_part_skipn (w : list ascii) (n : nat) :
+  n <= List.length (ws_part w) -> skipn n (ws_part w) = ws_part (skipn n w).
+Proof.
+  revert n. induction w as [| c w' IH]; intros n Hn; cbn [ws_part skipn] in *.
+  - destruct n; reflexivity.
+  - destruct (is_wsb c) eqn:E; cbn [ws_part skipn] in Hn.
+    + destruct n as [| n']; cbn [ws_part skipn].
+      * rewrite E. reflexivity.
+      * apply IH. assert (Hn' : n' <= List.length (ws_part w')) by (simpl in Hn; lia). exact Hn'.
+    + destruct n; cbn [ws_part skipn]; [rewrite E; reflexivity | simpl in Hn; lia].
+Qed.
+
+
+
+Lemma ws_part_char_ws (w : list ascii) (m : nat) (c : ascii) :
+  m < List.length (ws_part w) -> nth_error w m = Some c -> is_wsb c = true.
+Proof.
+
+  revert m c. induction w as [| c0 w' IH]; intros m c Hm Hnth; simpl in *.
+  - lia.
+  - destruct (is_wsb c0) eqn:E; simpl in Hm.
+    + destruct m as [| m']; simpl in Hnth.
+      * injection Hnth as Hc. subst c. exact E.
+      * apply (IH m' c); [lia | exact Hnth].
+    + lia.
+Qed.
+
+Lemma ws_denote_j (w : list ascii) (i j : nat) :
+  denote json_grammar w ws tt i tt tt j ->
+  j <= i + List.length (ws_part (skipn i w)).
+Proof.
+  intros Hd. unfold ws in Hd.
+  apply (fst (denote_map_iff ascii unit json_nt json_grammar w (list ascii) unit (fun _ : list ascii => tt) (Many (Tok (fun c : ascii => is_wsb c = true))) tt tt i j tt)) in Hd.
+  destruct Hd as [wsl [_ Hmany]].
+  revert i j Hmany. induction wsl as [| c wsl IH]; intros i j Hmany.
+  - apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii (Tok (fun c : ascii => is_wsb c = true)) tt tt i j (@nil ascii))) in Hmany.
+    destruct Hmany as [Hnil | Hcons].
+    + destruct Hnil as [[_ _] Ej]. subst. lia.
+    + destruct Hcons as [a [as' [γ'' [k [[E _] _]]]]]. discriminate.
+  - apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii (Tok (fun c : ascii => is_wsb c = true)) tt tt i j (c :: wsl))) in Hmany.
+    destruct Hmany as [Hnil | Hcons].
+    + destruct Hnil as [[E _] _]. discriminate.
+    + destruct Hcons as [a [as' [γ'' [k [[E Hone] Htail]]]]].
+      injection E as Ea Eas. subst a as'.
+      apply (fst (denote_tok_iff ascii unit json_nt json_grammar w (fun c : ascii => is_wsb c = true) c tt γ'' i k)) in Hone.
+      destruct Hone as [[[Eg Ej] Hnth] HP]. subst γ''. subst k.
+      specialize (IH (S i) j Htail).
+      rewrite (skipn_cons_head ascii w i c Hnth). simpl. rewrite HP. simpl.
+      set (X := List.length (ws_part (skipn (S i) w))) in *.
+      apply (Nat.le_trans j (S i + X) (i + S X) IH).
+      rewrite (Nat.add_succ_comm i X). reflexivity.
+Qed.
+
+Lemma ws_concat (w : list ascii) (i k j : nat) :
+  denote json_grammar w ws tt i tt tt k ->
+  denote json_grammar w ws tt k tt tt j ->
+  denote json_grammar w ws tt i tt tt j.
+Proof.
+  intros H1 H2. unfold ws in H1, H2.
+  apply (fst (denote_map_iff ascii unit json_nt json_grammar w (list ascii) unit (fun _ : list ascii => tt) (Many (Tok (fun c : ascii => is_wsb c = true))) tt tt i k tt)) in H1.
+  destruct H1 as [wsl1 [_ Hm1]].
+  apply (fst (denote_map_iff ascii unit json_nt json_grammar w (list ascii) unit (fun _ : list ascii => tt) (Many (Tok (fun c : ascii => is_wsb c = true))) tt tt k j tt)) in H2.
+  destruct H2 as [wsl2 [_ Hm2]].
+  apply d_map with (a := wsl1 ++ wsl2).
+  revert Hm1 Hm2. revert i k j.
+  induction wsl1 as [| c wsl1 IH]; intros i k j Hm1 Hm2.
+  - simpl. apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii (Tok (fun c : ascii => is_wsb c = true)) tt tt i k (@nil ascii))) in Hm1.
+    destruct Hm1 as [Hnil | Hcons].
+    + destruct Hnil as [[_ _] Ek]. subst. exact Hm2.
+    + destruct Hcons as [a [as' [γ'' [k' [[E _] _]]]]]. discriminate.
+  - apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii (Tok (fun c : ascii => is_wsb c = true)) tt tt i k (c :: wsl1))) in Hm1.
+    destruct Hm1 as [Hnil | Hcons].
+    + destruct Hnil as [[E _] _]. discriminate.
+    + destruct Hcons as [a [as' [γ'' [k' [[E Hone] Htail]]]]].
+      injection E as Ea Eas. subst a as'. destruct γ''.
+      apply d_many_cons with (γ' := tt) (j := k').
+      * exact Hone.
+      * simpl. apply (IH k' k j Htail Hm2).
+Qed.
+
+Lemma ws_denote_ge (w : list ascii) (i j : nat) :
+  denote json_grammar w ws tt i tt tt j -> i <= j.
+Proof.
+  intros Hd. unfold ws in Hd.
+  apply (fst (denote_map_iff ascii unit json_nt json_grammar w (list ascii) unit (fun _ : list ascii => tt) (Many (Tok (fun c : ascii => is_wsb c = true))) tt tt i j tt)) in Hd.
+  destruct Hd as [wsl [_ Hmany]].
+  revert i j Hmany. induction wsl as [| c wsl IH]; intros i j Hmany.
+  - apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii (Tok (fun c : ascii => is_wsb c = true)) tt tt i j (@nil ascii))) in Hmany.
+    destruct Hmany as [Hnil | Hcons].
+    + destruct Hnil as [[_ _] Ej]. subst. lia.
+    + destruct Hcons as [a [as' [γ'' [k [[E _] _]]]]]. discriminate.
+  - apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii (Tok (fun c : ascii => is_wsb c = true)) tt tt i j (c :: wsl))) in Hmany.
+    destruct Hmany as [Hnil | Hcons].
+    + destruct Hnil as [[E _] _]. discriminate.
+    + destruct Hcons as [a [as' [γ'' [k [[E Hone] Htail]]]]].
+      injection E as Ea Eas. subst a as'.
+      apply (fst (denote_tok_iff ascii unit json_nt json_grammar w (fun c : ascii => is_wsb c = true) c tt γ'' i k)) in Hone.
+      destruct Hone as [[[Eg Ej] Hnth] HP]. subst γ''. subst k.
+      specialize (IH (S i) j Htail). lia.
+Qed.
+
+Lemma skip_ws_ws (w : list ascii) (i j : nat) :
+  denote json_grammar w ws tt i tt tt j ->
+  skip_ws (skipn i w) = skip_ws (skipn j w).
+Proof.
+  intros Hd.
+  pose proof (ws_denote_j w i j Hd) as Hle.
+  pose proof (ws_denote_ge w i j Hd) as Hge.
+  assert (Hle' : j - i <= List.length (ws_part (skipn i w))) by lia.
+  rewrite <- (skipn_length_app ascii (ws_part (skipn i w)) (skip_ws (skipn i w))).
+  rewrite <- (skipn_length_app ascii (ws_part (skipn j w)) (skip_ws (skipn j w))).
+  rewrite (ws_part_skip (skipn i w)). rewrite (ws_part_skip (skipn j w)).
+  rewrite <- (firstn_skipn (j - i) (ws_part (skipn i w))).
+  rewrite length_app. rewrite firstn_length.
+  rewrite (Nat.min_l (j - i) (List.length (ws_part (skipn i w))) Hle').
+  rewrite (ws_part_skipn (skipn i w) (j - i) Hle').
+  rewrite (skipn_skipn (j - i) i w). replace ((j - i) + i) with j by lia.
+  replace ((j - i) + List.length (ws_part (skipn j w))) with (List.length (ws_part (skipn j w)) + (j - i)) by lia.
+  rewrite <- (skipn_skipn (List.length (ws_part (skipn j w))) (j - i) (skipn i w)).
+  rewrite (skipn_skipn (j - i) i w). replace ((j - i) + i) with j by lia.
+  reflexivity.
+Qed.
+
+
+Lemma ws_ws_skip (prefix w : list ascii) (j1 j3 : nat) :
+  denote json_grammar (prefix ++ w) ws tt (List.length prefix) tt tt j1 ->
+  denote json_grammar (prefix ++ w) ws tt j1 tt tt j3 ->
+  (forall c : ascii, nth_error (prefix ++ w) j3 = Some c -> is_wsb c = false) ->
+  skip_ws w = skipn j3 (prefix ++ w).
+Proof.
+  intros H1 H2 Hnonws.
+  pose proof (ws_concat (prefix ++ w) (List.length prefix) j1 j3 H1 H2) as Hws.
+  pose proof (ws_denote_j (prefix ++ w) (List.length prefix) j3 Hws) as Hle.
+  rewrite (skipn_length_app ascii prefix w) in Hle.
+  pose proof (ws_denote_ge (prefix ++ w) (List.length prefix) j3 Hws) as Hge_j3.
+  assert (Hj3 : j3 = List.length prefix + List.length (ws_part w)).
+  { assert (Hge : List.length (ws_part w) <= j3 - List.length prefix).
+    { destruct (Nat.lt_ge_cases (j3 - List.length prefix) (List.length (ws_part w))) as [Hlt | Hge']; [| exact Hge'].
+      exfalso.
+      assert (Hltw : j3 - List.length prefix < List.length w).
+      { assert (Hwslen : List.length (ws_part w) <= List.length w).
+        { clear. induction w; simpl; [lia |]. destruct (is_wsb a) eqn:E; simpl; lia. }
+        lia. }
+      destruct (nth_error w (j3 - List.length prefix)) as [c |] eqn:E.
+      - pose proof (ws_part_char_ws w (j3 - List.length prefix) c Hlt E) as Hwc.
+        assert (Hnthj3 : nth_error (prefix ++ w) j3 = Some c).
+        { rewrite (nth_error_app2 prefix w Hge_j3). exact E. }
+        apply (Hnonws c) in Hnthj3. rewrite Hwc in Hnthj3. discriminate.
+
+      - apply nth_error_None in E. lia. }
+    lia. }
+  rewrite Hj3.
+  replace (prefix ++ w) with (prefix ++ ws_part w ++ skip_ws w) by (rewrite (ws_part_skip w); reflexivity).
+  rewrite app_assoc.
+  rewrite <- (length_app prefix (ws_part w)).
+  rewrite (skipn_length_app ascii (prefix ++ ws_part w) (skip_ws w)).
+  reflexivity.
+Qed.
+
+Lemma ws_skip (prefix w : list ascii) (j : nat) :
+  denote json_grammar (prefix ++ w) ws tt (List.length prefix) tt tt j ->
+  (forall c : ascii, nth_error (prefix ++ w) j = Some c -> is_wsb c = false) ->
+  skip_ws w = skipn j (prefix ++ w).
+Proof.
+  intros H1 Hnonws.
+  pose proof (ws_denote_j (prefix ++ w) (List.length prefix) j H1) as Hle.
+  rewrite (skipn_length_app ascii prefix w) in Hle.
+  pose proof (ws_denote_ge (prefix ++ w) (List.length prefix) j H1) as Hge_j.
+  assert (Hj : j = List.length prefix + List.length (ws_part w)).
+  { assert (Hge : List.length (ws_part w) <= j - List.length prefix).
+    { destruct (Nat.lt_ge_cases (j - List.length prefix) (List.length (ws_part w))) as [Hlt | Hge']; [| exact Hge'].
+      exfalso.
+      assert (Hltw : j - List.length prefix < List.length w).
+      { assert (Hwslen : List.length (ws_part w) <= List.length w).
+        { clear. induction w; simpl; [lia |]. destruct (is_wsb a) eqn:E; simpl; lia. }
+        lia. }
+      destruct (nth_error w (j - List.length prefix)) as [c |] eqn:E.
+      - pose proof (ws_part_char_ws w (j - List.length prefix) c Hlt E) as Hwc.
+        assert (Hnthj : nth_error (prefix ++ w) j = Some c).
+        { rewrite (nth_error_app2 prefix w Hge_j). exact E. }
+        apply (Hnonws c) in Hnthj. rewrite Hwc in Hnthj. discriminate.
+      - apply nth_error_None in E. lia. }
+    lia. }
+  rewrite Hj.
+  replace (prefix ++ w) with (prefix ++ ws_part w ++ skip_ws w) by (rewrite (ws_part_skip w); reflexivity).
+  rewrite app_assoc. rewrite <- (length_app prefix (ws_part w)).
+  rewrite (skipn_length_app ascii (prefix ++ ws_part w) (skip_ws w)). reflexivity.
+Qed.
+
+Lemma ws_skip_j (prefix w : list ascii) (j : nat) :
+  denote json_grammar (prefix ++ w) ws tt (List.length prefix) tt tt j ->
+  (forall c : ascii, nth_error (prefix ++ w) j = Some c -> is_wsb c = false) ->
+  j = List.length prefix + List.length (ws_part w).
+Proof.
+  intros H1 Hnonws.
+  pose proof (ws_denote_j (prefix ++ w) (List.length prefix) j H1) as Hle.
+  rewrite (skipn_length_app ascii prefix w) in Hle.
+  pose proof (ws_denote_ge (prefix ++ w) (List.length prefix) j H1) as Hge_j.
+  assert (Hge : List.length (ws_part w) <= j - List.length prefix).
+  { destruct (Nat.lt_ge_cases (j - List.length prefix) (List.length (ws_part w))) as [Hlt | Hge']; [| exact Hge'].
+    exfalso.
+    assert (Hltw : j - List.length prefix < List.length w).
+    { assert (Hwslen : List.length (ws_part w) <= List.length w) by (clear; induction w; simpl; [lia |]; destruct (is_wsb a) eqn:E; simpl; lia).
+      lia. }
+    destruct (nth_error w (j - List.length prefix)) as [c |] eqn:E.
+    - pose proof (ws_part_char_ws w (j - List.length prefix) c Hlt E) as Hwc.
+      assert (Hnthj : nth_error (prefix ++ w) j = Some c).
+      { rewrite (nth_error_app2 prefix w Hge_j). exact E. }
+      apply (Hnonws c) in Hnthj. rewrite Hwc in Hnthj. discriminate.
+    - apply nth_error_None in E. lia. }
+  lia.
+Qed.
+Lemma ws_skip_gen (w : list ascii) (i j : nat) :
+  denote json_grammar w ws tt i tt tt j ->
+  (forall c : ascii, nth_error w j = Some c -> is_wsb c = false) ->
+  skip_ws (skipn i w) = skipn j w.
+Proof.
+  intros H1 Hnonws.
+  pose proof (ws_denote_j w i j H1) as Hle.
+  pose proof (ws_denote_ge w i j H1) as Hge_j.
+  assert (Hj : j = i + List.length (ws_part (skipn i w))).
+  { assert (Hge : List.length (ws_part (skipn i w)) <= j - i).
+    { destruct (Nat.lt_ge_cases (j - i) (List.length (ws_part (skipn i w)))) as [Hlt | Hge']; [| exact Hge'].
+      exfalso.
+      assert (Hltw : j - i < List.length (skipn i w)).
+      { assert (Hwslen : List.length (ws_part (skipn i w)) <= List.length (skipn i w)).
+        { clear. induction (skipn i w); simpl; [lia |]. destruct (is_wsb a) eqn:E; simpl; lia. }
+        lia. }
+      assert (Hi_len : i <= List.length w) by (rewrite (skipn_length i w) in Hltw; lia).
+      destruct (nth_error (skipn i w) (j - i)) as [c |] eqn:E.
+      - pose proof (ws_part_char_ws (skipn i w) (j - i) c Hlt E) as Hwc.
+        assert (Hnthj : nth_error w j = Some c).
+        { rewrite <- (firstn_skipn i w). rewrite (nth_error_app2 (firstn i w) (skipn i w)).
+          - replace (j - Datatypes.length (firstn i w)) with (j - i) by (rewrite firstn_length; rewrite (Nat.min_l i (Datatypes.length w) Hi_len); reflexivity).
+            exact E.
+          - rewrite firstn_length. lia. }
+        apply (Hnonws c) in Hnthj. rewrite Hwc in Hnthj. discriminate.
+      - apply nth_error_None in E. lia. }
+    lia. }
+  rewrite Hj.
+  rewrite Nat.add_comm.
+  rewrite <- (skipn_skipn (List.length (ws_part (skipn i w))) i w).
+  rewrite <- (skipn_length_app ascii (ws_part (skipn i w)) (skip_ws (skipn i w))).
+  f_equal. rewrite (ws_part_skip (skipn i w)). reflexivity.
+Qed.
+
+#[local] Definition Vst (w : list ascii) : Type :=
+  forall (prefix : list ascii) (v : Json) (j : nat),
+    denote json_grammar (prefix ++ w) value_spec tt (List.length prefix) v tt j ->
+    (forall c : ascii, nth_error (prefix ++ w) j = Some c -> is_digitb c = false) ->
+    sigT (fun fuel : nat => prod (fuel <= 3 * List.length w) (parse_value fuel w = Some (v, skipn j (prefix ++ w)))).
+#[local] Definition Ost (w : list ascii) : Type :=
+  forall (prefix : list ascii) (ms : list (list ascii * Json)) (j : nat),
+    denote json_grammar (prefix ++ w) object_body_spec tt (List.length prefix) ms tt j ->
+    sigT (fun fuel : nat => prod (fuel <= 3 * List.length w + 2) (parse_object fuel w = Some (ms, skipn j (prefix ++ w)))).
+#[local] Definition Ast (w : list ascii) : Type :=
+  forall (prefix : list ascii) (vs : list Json) (j : nat),
+    denote json_grammar (prefix ++ w) array_body_spec tt (List.length prefix) vs tt j ->
+    sigT (fun fuel : nat => prod (fuel <= 3 * List.length w + 2) (parse_array fuel w = Some (vs, skipn j (prefix ++ w)))).
+
+
+Opaque parse_string parse_number parse_lit.
+ (* Fuel monotonicity and bound for the recursive parsers. *)
+Lemma parse_all_mono : forall fuel fuel',
+  fuel <= fuel' ->
+  (forall w r, parse_value fuel w = Some r -> parse_value fuel' w = Some r)
+  * (forall w r, parse_object fuel w = Some r -> parse_object fuel' w = Some r)
+  * (forall w r, parse_array fuel w = Some r -> parse_array fuel' w = Some r)
+  * (forall w r, parse_members fuel w = Some r -> parse_members fuel' w = Some r)
+  * (forall w r, parse_members_more fuel w = Some r -> parse_members_more fuel' w = Some r)
+  * (forall w r, parse_elements fuel w = Some r -> parse_elements fuel' w = Some r)
+  * (forall w r, parse_elements_more fuel w = Some r -> parse_elements_more fuel' w = Some r).
+Proof.
+  induction fuel as [| f IH]; intros fuel' Hle.
+  { repeat split; intros w r H;
+    cbn [parse_value parse_object parse_array parse_members parse_members_more parse_elements parse_elements_more] in H; discriminate. }
+  destruct fuel' as [| f']; [lia |].
+  assert (Hle' : f <= f') by lia.
+  destruct (IH f' Hle') as [[[[[[IHv IHo] IHa] IHm] IHmm] IHe] IHem].
+  repeat split; intros w r H.
+  - (* parse_value *)
+    cbn [parse_value] in H.
+    destruct w as [| c rest]; cbn [parse_value] in H; try discriminate.
+    cbn [parse_value].
+    destruct (Ascii.eqb c "{"%char) eqn:E1.
+    + destruct (parse_object f rest) as [[? ?] |] eqn:Eo; try discriminate.
+      rewrite (IHo _ _ Eo). cbn. exact H.
+    + destruct (Ascii.eqb c "["%char) eqn:E2.
+      * destruct (parse_array f rest) as [[? ?] |] eqn:Ea; try discriminate.
+        rewrite (IHa _ _ Ea). cbn. exact H.
+      * destruct (Ascii.eqb c "034"%char) eqn:E3.
+        -- destruct (parse_string (c :: rest)) as [[? ?] |] eqn:Es; try discriminate. exact H.
+        -- destruct (Ascii.eqb c "t"%char) eqn:E4.
+           ++ destruct (parse_lit "rue" rest) as [? |] eqn:El; try discriminate. exact H.
+           ++ destruct (Ascii.eqb c "f"%char) eqn:E5.
+              ** destruct (parse_lit "alse" rest) as [? |] eqn:El; try discriminate. exact H.
+              ** destruct (Ascii.eqb c "n"%char) eqn:E6.
+                 --+ destruct (parse_lit "ull" rest) as [? |] eqn:El; try discriminate. exact H.
+                 --+ destruct (is_digitb c || Ascii.eqb c "-"%char) eqn:E7.
+                     ---+ destruct (parse_number (c :: rest)) as [[? ?] |] eqn:En; try discriminate. exact H.
+                     ---+ discriminate.
+  - (* parse_object *)
+    cbn [parse_object] in H.
+    destruct (parse_members f (skip_ws w)) as [[ms rest] |] eqn:Em; cbn [parse_object] in H; try discriminate.
+    cbn [parse_object].
+    rewrite (IHm _ _ Em). cbn. exact H.
+  - (* parse_array *)
+    cbn [parse_array] in H.
+    destruct (parse_elements f (skip_ws w)) as [[vs rest] |] eqn:Ee; cbn [parse_array] in H; try discriminate.
+    cbn [parse_array].
+    rewrite (IHe _ _ Ee). cbn. exact H.
+  - (* parse_members *)
+    cbn [parse_members] in H.
+    destruct w as [| c rest]; cbn [parse_members] in H; try discriminate.
+    cbn [parse_members].
+    destruct (Ascii.eqb c "}"%char) eqn:E1.
+    + exact H.
+    + destruct (parse_string (c :: rest)) as [[s rest1] |] eqn:Es; try discriminate.
+      destruct (skip_ws rest1) as [| c' rest2] eqn:Ew; try discriminate.
+      destruct (Ascii.eqb c' ":"%char) eqn:E2.
+      * destruct (parse_value f (skip_ws rest2)) as [[v rest3] |] eqn:Ev; try discriminate.
+        rewrite (IHv _ _ Ev).
+        destruct (parse_members_more f (skip_ws rest3)) as [[ms rest4] |] eqn:Emm; try discriminate.
+        rewrite (IHmm _ _ Emm). cbn. exact H.
+      * discriminate.
+  - (* parse_members_more *)
+    cbn [parse_members_more] in H.
+    destruct w as [| c rest]; cbn [parse_members_more] in H; try discriminate.
+    cbn [parse_members_more].
+    destruct (Ascii.eqb c "}"%char) eqn:E1.
+    + exact H.
+    + destruct (Ascii.eqb c ","%char) eqn:E2.
+      * destruct (parse_string (skip_ws rest)) as [[s rest1] |] eqn:Es; try discriminate.
+        destruct (skip_ws rest1) as [| c' rest2] eqn:Ew; try discriminate.
+        destruct (Ascii.eqb c' ":"%char) eqn:E3.
+        -- destruct (parse_value f (skip_ws rest2)) as [[v rest3] |] eqn:Ev; try discriminate.
+           rewrite (IHv _ _ Ev).
+           destruct (parse_members_more f (skip_ws rest3)) as [[ms rest4] |] eqn:Emm; try discriminate.
+           rewrite (IHmm _ _ Emm). cbn. exact H.
+        -- discriminate.
+      * discriminate.
+  - (* parse_elements *)
+    cbn [parse_elements] in H.
+    destruct w as [| c rest]; cbn [parse_elements] in H; try discriminate.
+    cbn [parse_elements].
+    destruct (Ascii.eqb c "]"%char) eqn:E1.
+    + exact H.
+    + destruct (parse_value f (c :: rest)) as [[v rest1] |] eqn:Ev; try discriminate.
+      rewrite (IHv _ _ Ev).
+      destruct (parse_elements_more f (skip_ws rest1)) as [[vs rest2] |] eqn:Eem; try discriminate.
+      rewrite (IHem _ _ Eem). cbn. exact H.
+  - (* parse_elements_more *)
+    cbn [parse_elements_more] in H.
+    destruct w as [| c rest]; cbn [parse_elements_more] in H; try discriminate.
+    cbn [parse_elements_more].
+    destruct (Ascii.eqb c "]"%char) eqn:E1.
+    + exact H.
+    + destruct (Ascii.eqb c ","%char) eqn:E2.
+      * destruct (parse_value f (skip_ws rest)) as [[v rest1] |] eqn:Ev; try discriminate.
+        rewrite (IHv _ _ Ev).
+        destruct (parse_elements_more f (skip_ws rest1)) as [[vs rest2] |] eqn:Eem; try discriminate.
+        rewrite (IHem _ _ Eem). cbn. exact H.
+      * discriminate.
+Qed.
+
+Lemma parse_value_mono (fuel fuel' : nat) (w : list ascii) (r : Json * list ascii) :
+  fuel <= fuel' -> parse_value fuel w = Some r -> parse_value fuel' w = Some r.
+Proof.
+  intros Hle H. exact (fst (fst (fst (fst (fst (fst (parse_all_mono fuel fuel' Hle)))))) w r H).
+Qed.
+
+Lemma parse_members_more_mono (fuel fuel' : nat) (w : list ascii) (r : list (list ascii * Json) * list ascii) :
+  fuel <= fuel' -> parse_members_more fuel w = Some r -> parse_members_more fuel' w = Some r.
+Proof.
+  intros Hle H. exact (snd (fst (fst (parse_all_mono fuel fuel' Hle))) w r H).
+Qed.
+
+Lemma parse_elements_more_mono (fuel fuel' : nat) (w : list ascii) (r : list Json * list ascii) :
+  fuel <= fuel' -> parse_elements_more fuel w = Some r -> parse_elements_more fuel' w = Some r.
+Proof.
+  intros Hle H. exact (snd (parse_all_mono fuel fuel' Hle) w r H).
+Qed.
+
+Lemma value_len_nonempty (prefix w : list ascii) (v : Json) (j : nat) :
+  denote json_grammar (prefix ++ w) value_spec tt (List.length prefix) v tt j ->
+  List.length w >= 1.
+Proof.
+  intros Hd. unfold value_spec in Hd.
+  apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json (Map (fun _ : unit => JNull) (lit "null")) _ tt tt (List.length prefix) j v)) in Hd.
+  destruct Hd as [Hd | Hd].
+  - apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit Json (fun _ : unit => JNull) (lit "null") tt tt (List.length prefix) j v)) in Hd.
+    destruct Hd as [u [Ev Hl]]. subst v.
+    apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "n") (lit "ull")) tt tt (List.length prefix) j u)) in Hl.
+    destruct Hl as [p [_ Hseq]].
+    apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char "n") (lit "ull") tt tt (List.length prefix) j p)) in Hseq.
+    destruct Hseq as [γ1 [j1 [a [b [[_ Hc] _]]]]].
+    destruct (char_head_cons "n"%char prefix w a γ1 j1 Hc) as [rest [Ew _]]. subst w. simpl. lia.
+  - apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+    destruct Hd as [Hd | Hd].
+    + apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+      destruct Hd as [Hd | Hd].
+      * apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) bool Json (fun b : bool => JBool b) _ tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [b [Ev Hb]]. subst v.
+        apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) bool _ _ tt tt (List.length prefix) j b)) in Hb.
+        destruct Hb as [Ht | Hf].
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit bool (fun _ : unit => true) (lit "true") tt tt (List.length prefix) j b)) in Ht.
+           destruct Ht as [u [Eb Hl]]. subst b.
+           apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "t") (lit "rue")) tt tt (List.length prefix) j u)) in Hl.
+           destruct Hl as [p [_ Hseq]].
+           apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char "t") (lit "rue") tt tt (List.length prefix) j p)) in Hseq.
+           destruct Hseq as [γ1 [j1 [a [b [[_ Hc] _]]]]].
+           destruct (char_head_cons "t"%char prefix w a γ1 j1 Hc) as [rest [Ew _]]. subst w. simpl. lia.
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit bool (fun _ : unit => false) (lit "false") tt tt (List.length prefix) j b)) in Hf.
+           destruct Hf as [u [Eb Hl]]. subst b.
+           apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "f") (lit "alse")) tt tt (List.length prefix) j u)) in Hl.
+           destruct Hl as [p [_ Hseq]].
+           apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char "f") (lit "alse") tt tt (List.length prefix) j p)) in Hseq.
+           destruct Hseq as [γ1 [j1 [a [b [[_ Hc] _]]]]].
+           destruct (char_head_cons "f"%char prefix w a γ1 j1 Hc) as [rest [Ew _]]. subst w. simpl. lia.
+      * apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list ascii) Json JString string_spec tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [ss [Ev Hs]]. subst v.
+        apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list ascii) (char "034") (fun _ : unit => Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034") (fun _ : unit => Pure cs))) tt tt (List.length prefix) j ss)) in Hs.
+        destruct Hs as [γ1 [j1 [a [Hc _]]]].
+        destruct (char_head_cons "034"%char prefix w a γ1 j1 Hc) as [rest [Ew _]]. subst w. simpl. lia.
+    + apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+      destruct Hd as [Hd | Hd].
+      * apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) Z Json JNumber number_spec tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [n [Ev Hn]]. subst v.
+        destruct (number_head prefix w n j Hn) as [c [rest [Ew _]]]. subst w. simpl. lia.
+      * apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [Hd | Hd].
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list Json) Json JArray array_spec tt tt (List.length prefix) j v)) in Hd.
+           destruct Hd as [vs [Ev Ha]]. subst v.
+           apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list Json) (char "[") (fun _ : unit => Bind ws (fun _ : unit => Bind elements_spec (fun vs0 : list Json => Bind ws (fun _ : unit => Bind (char "]") (fun _ : unit => Pure vs0))))) tt tt (List.length prefix) j vs)) in Ha.
+           destruct Ha as [γ1 [j1 [a [Hc _]]]].
+           destruct (char_head_cons "["%char prefix w a γ1 j1 Hc) as [rest [Ew _]]. subst w. simpl. lia.
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list (list ascii * Json)) Json JObject object_spec tt tt (List.length prefix) j v)) in Hd.
+           destruct Hd as [ms [Ev Ho]]. subst v.
+           apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list (list ascii * Json)) (char "{") (fun _ : unit => Bind ws (fun _ : unit => Bind members_spec (fun ms0 : list (list ascii * Json) => Bind ws (fun _ : unit => Bind (char "}") (fun _ : unit => Pure ms0))))) tt tt (List.length prefix) j ms)) in Ho.
+           destruct Ho as [γ1 [j1 [a [Hc _]]]].
+           destruct (char_head_cons "{"%char prefix w a γ1 j1 Hc) as [rest [Ew _]]. subst w. simpl. lia.
+Qed.
+
+Lemma value_first_char (prefix w : list ascii) (v : Json) (j : nat) :
+  denote json_grammar (prefix ++ w) value_spec tt (List.length prefix) v tt j ->
+  { c : ascii & { rest : list ascii & prod (w = c :: rest) (Ascii.eqb c "]"%char = false) } }.
+Proof.
+  intros Hd. unfold value_spec in Hd.
+  apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json (Map (fun _ : unit => JNull) (lit "null")) _ tt tt (List.length prefix) j v)) in Hd.
+  destruct Hd as [Hd | Hd].
+  - apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit Json (fun _ : unit => JNull) (lit "null") tt tt (List.length prefix) j v)) in Hd.
+    destruct Hd as [u [Ev Hl]]. subst v.
+    apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "n") (lit "ull")) tt tt (List.length prefix) j u)) in Hl.
+    destruct Hl as [p [_ Hseq]].
+    apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char "n") (lit "ull") tt tt (List.length prefix) j p)) in Hseq.
+    destruct Hseq as [γ1 [j1 [a [b [[_ Hc] _]]]]].
+    destruct (char_head_cons "n"%char prefix w a γ1 j1 Hc) as [rest [Ew _]]. subst w.
+    exists "n"%char, rest. split; [reflexivity | reflexivity].
+  - apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+    destruct Hd as [Hd | Hd].
+    + apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+      destruct Hd as [Hd | Hd].
+      * apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) bool Json (fun b : bool => JBool b) _ tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [b [Ev Hb]]. subst v.
+        apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) bool _ _ tt tt (List.length prefix) j b)) in Hb.
+        destruct Hb as [Ht | Hf].
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit bool (fun _ : unit => true) (lit "true") tt tt (List.length prefix) j b)) in Ht.
+           destruct Ht as [u [Eb Hl]]. subst b.
+           apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "t") (lit "rue")) tt tt (List.length prefix) j u)) in Hl.
+           destruct Hl as [p [_ Hseq]].
+           apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char "t") (lit "rue") tt tt (List.length prefix) j p)) in Hseq.
+           destruct Hseq as [γ1 [j1 [a [b [[_ Hc] _]]]]].
+           destruct (char_head_cons "t"%char prefix w a γ1 j1 Hc) as [rest [Ew _]]. subst w.
+           exists "t"%char, rest. split; [reflexivity | reflexivity].
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit bool (fun _ : unit => false) (lit "false") tt tt (List.length prefix) j b)) in Hf.
+           destruct Hf as [u [Eb Hl]]. subst b.
+           apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "f") (lit "alse")) tt tt (List.length prefix) j u)) in Hl.
+           destruct Hl as [p [_ Hseq]].
+           apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char "f") (lit "alse") tt tt (List.length prefix) j p)) in Hseq.
+           destruct Hseq as [γ1 [j1 [a [b [[_ Hc] _]]]]].
+           destruct (char_head_cons "f"%char prefix w a γ1 j1 Hc) as [rest [Ew _]]. subst w.
+           exists "f"%char, rest. split; [reflexivity | reflexivity].
+      * apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list ascii) Json JString string_spec tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [ss [Ev Hs]]. subst v.
+        apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list ascii) (char "034") (fun _ : unit => Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034") (fun _ : unit => Pure cs))) tt tt (List.length prefix) j ss)) in Hs.
+        destruct Hs as [γ1 [j1 [a [Hc _]]]].
+        destruct (char_head_cons "034"%char prefix w a γ1 j1 Hc) as [rest [Ew _]]. subst w.
+        exists "034"%char, rest. split; [reflexivity | reflexivity].
+    + apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+      destruct Hd as [Hd | Hd].
+      * apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) Z Json JNumber number_spec tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [n [Ev Hn]]. subst v.
+        destruct (number_head prefix w n j Hn) as [c [rest [Ew Horb]]]. subst w.
+        exists c, rest. split; [reflexivity |].
+        destruct (is_digitb c) eqn:Ed.
+        -- destruct (Ascii.eqb c "]"%char) eqn:E; [| reflexivity].
+           apply (Ascii.eqb_eq c "]"%char) in E. subst c. unfold is_digitb in Ed. simpl in Ed. discriminate.
+        -- simpl in Horb. apply (Ascii.eqb_eq c "-"%char) in Horb. subst c. reflexivity.
+      * apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [Hd | Hd].
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list Json) Json JArray array_spec tt tt (List.length prefix) j v)) in Hd.
+           destruct Hd as [vs [Ev Ha]]. subst v.
+           apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list Json) (char "[") (fun _ : unit => Bind ws (fun _ : unit => Bind elements_spec (fun vs0 : list Json => Bind ws (fun _ : unit => Bind (char "]") (fun _ : unit => Pure vs0))))) tt tt (List.length prefix) j vs)) in Ha.
+           destruct Ha as [γ1 [j1 [a [Hc _]]]].
+           destruct (char_head_cons "["%char prefix w a γ1 j1 Hc) as [rest [Ew _]]. subst w.
+           exists "["%char, rest. split; [reflexivity | reflexivity].
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list (list ascii * Json)) Json JObject object_spec tt tt (List.length prefix) j v)) in Hd.
+           destruct Hd as [ms [Ev Ho]]. subst v.
+           apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list (list ascii * Json)) (char "{") (fun _ : unit => Bind ws (fun _ : unit => Bind members_spec (fun ms0 : list (list ascii * Json) => Bind ws (fun _ : unit => Bind (char "}") (fun _ : unit => Pure ms0))))) tt tt (List.length prefix) j ms)) in Ho.
+           destruct Ho as [γ1 [j1 [a [Hc _]]]].
+           destruct (char_head_cons "{"%char prefix w a γ1 j1 Hc) as [rest [Ew _]]. subst w.
+           exists "{"%char, rest. split; [reflexivity | reflexivity].
+Qed.
+
+Lemma value_consumes (prefix w : list ascii) (v : Json) (j : nat) :
+  denote json_grammar (prefix ++ w) value_spec tt (List.length prefix) v tt j ->
+  List.length prefix < j.
+Proof.
+  intros Hd. unfold value_spec in Hd.
+  apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json (Map (fun _ : unit => JNull) (lit "null")) _ tt tt (List.length prefix) j v)) in Hd.
+  destruct Hd as [Hd | Hd].
+  - apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit Json (fun _ : unit => JNull) (lit "null") tt tt (List.length prefix) j v)) in Hd.
+    destruct Hd as [u [Ev Hl]]. subst v.
+    apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "n") (lit "ull")) tt tt (List.length prefix) j u)) in Hl.
+    destruct Hl as [p [_ Hseq]].
+    apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char "n") (lit "ull") tt tt (List.length prefix) j p)) in Hseq.
+    destruct Hseq as [γ1 [j1 [a [b [[_ Hc] Hl2]]]]].
+    destruct (char_head_cons "n"%char prefix w a γ1 j1 Hc) as [rest [Ew [Eg Ej]]]. subst γ1. subst w.
+    pose proof (denote_ge_json (prefix ++ "n"%char :: rest) unit (lit "ull") tt tt j1 j b Hl2) as Hg. lia.
+  - apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+    destruct Hd as [Hd | Hd].
+    + apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+      destruct Hd as [Hd | Hd].
+      * apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) bool Json (fun b : bool => JBool b) _ tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [b [Ev Hb]]. subst v.
+        apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) bool _ _ tt tt (List.length prefix) j b)) in Hb.
+        destruct Hb as [Ht | Hf].
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit bool (fun _ : unit => true) (lit "true") tt tt (List.length prefix) j b)) in Ht.
+           destruct Ht as [u [Eb Hl]]. subst b.
+           apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "t") (lit "rue")) tt tt (List.length prefix) j u)) in Hl.
+           destruct Hl as [p [_ Hseq]].
+           apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char "t") (lit "rue") tt tt (List.length prefix) j p)) in Hseq.
+           destruct Hseq as [γ1 [j1 [a [b [[_ Hc] Hl2]]]]].
+           destruct (char_head_cons "t"%char prefix w a γ1 j1 Hc) as [rest [Ew [Eg Ej]]]. subst γ1. subst w.
+           pose proof (denote_ge_json (prefix ++ "t"%char :: rest) unit (lit "rue") tt tt j1 j b Hl2) as Hg. lia.
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit bool (fun _ : unit => false) (lit "false") tt tt (List.length prefix) j b)) in Hf.
+           destruct Hf as [u [Eb Hl]]. subst b.
+           apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "f") (lit "alse")) tt tt (List.length prefix) j u)) in Hl.
+           destruct Hl as [p [_ Hseq]].
+           apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char "f") (lit "alse") tt tt (List.length prefix) j p)) in Hseq.
+           destruct Hseq as [γ1 [j1 [a [b [[_ Hc] Hl2]]]]].
+           destruct (char_head_cons "f"%char prefix w a γ1 j1 Hc) as [rest [Ew [Eg Ej]]]. subst γ1. subst w.
+           pose proof (denote_ge_json (prefix ++ "f"%char :: rest) unit (lit "alse") tt tt j1 j b Hl2) as Hg. lia.
+      * apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list ascii) Json JString string_spec tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [ss [Ev Hs]]. subst v.
+        apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list ascii) (char "034") (fun _ : unit => Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034") (fun _ : unit => Pure cs))) tt tt (List.length prefix) j ss)) in Hs.
+        destruct Hs as [γ1 [j1 [a [Hc Hl2]]]].
+        destruct (char_head_cons "034"%char prefix w a γ1 j1 Hc) as [rest [Ew [Eg Ej]]]. subst γ1. subst w.
+        pose proof (denote_ge_json (prefix ++ "034"%char :: rest) (list ascii) (Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034") (fun _ : unit => Pure cs))) tt tt j1 j ss Hl2) as Hg. lia.
+    + apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+      destruct Hd as [Hd | Hd].
+      * apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) Z Json JNumber number_spec tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [n [Ev Hn]]. subst v.
+        unfold number_spec in Hn.
+        apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) bool Z (Alt (Map (fun _ : unit => true) (char "-")) (Pure false)) (fun neg : bool => Map (fun n0 : nat => if neg then Z.opp (Z.of_nat n0) else Z.of_nat n0) int_spec) tt tt (List.length prefix) j n)) in Hn.
+        destruct Hn as [γ1 [j1 [neg [Hneg Hn2]]]]. destruct γ1.
+        apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) bool (Map (fun _ : unit => true) (char "-")) (Pure false) tt tt (List.length prefix) j1 neg)) in Hneg.
+        destruct Hneg as [Hdash | Hfalse].
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit bool (fun _ : unit => true) (char "-") tt tt (List.length prefix) j1 neg)) in Hdash.
+           destruct Hdash as [u [E Hc]].
+           destruct (char_head_cons "-"%char prefix w u tt j1 Hc) as [rest [Ew [Eg Ej]]]. subst j1. subst w.
+           pose proof (denote_ge_json (prefix ++ "-"%char :: rest) Z (Map (fun n0 : nat => if neg then Z.opp (Z.of_nat n0) else Z.of_nat n0) int_spec) tt tt (S (List.length prefix)) j n Hn2) as Hg. lia.
+        -- apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix ++ w) bool false tt (List.length prefix) neg tt j1)) in Hfalse.
+           destruct Hfalse as [[Eneg _] Ej]. subst j1. subst neg.
+           unfold int_spec in Hn2.
+           apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) nat Z (fun n0 : nat => Z.of_nat n0) (Alt (Map (fun _ : unit => 0) (char "0")) (Map (fun p : ascii * list ascii => digits_to_nat (fst p :: snd p)) (Seq digit1_9_spec (Many digit_spec)))) tt tt (List.length prefix) j n)) in Hn2.
+           destruct Hn2 as [n0 [En Hn3]]. subst n.
+           apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) nat (Map (fun _ : unit => 0) (char "0")) _ tt tt (List.length prefix) j n0)) in Hn3.
+           destruct Hn3 as [Hz | Hd19].
+           ++ apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit nat (fun _ : unit => 0) (char "0") tt tt (List.length prefix) j n0)) in Hz.
+              destruct Hz as [u [E0 Hc]].
+              destruct (char_head_cons "0"%char prefix w u tt j Hc) as [rest [Ew [Eg Ej]]]. subst w. lia.
+           ++ apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (ascii * list ascii) nat (fun p : ascii * list ascii => digits_to_nat (fst p :: snd p)) (Seq digit1_9_spec (Many digit_spec)) tt tt (List.length prefix) j n0)) in Hd19.
+              destruct Hd19 as [p [E Hseq]].
+              apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) ascii (list ascii) digit1_9_spec (Many digit_spec) tt tt (List.length prefix) j p)) in Hseq.
+              destruct Hseq as [γ2 [j2 [c [cs [[Eab Hd19c] Hmany]]]]].
+              apply (fst (denote_tok_iff ascii unit json_nt json_grammar (prefix ++ w) (fun c0 : ascii => is_digit1_9b c0 = true) c tt γ2 (List.length prefix) j2)) in Hd19c.
+              destruct Hd19c as [[[Eg2 Ej2] Hnth] HP]. subst γ2. subst j2.
+              pose proof (denote_ge_json (prefix ++ w) (list ascii) (Many digit_spec) tt tt (S (List.length prefix)) j cs Hmany) as Hg.
+              lia.
+      * apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [Hd | Hd].
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list Json) Json JArray array_spec tt tt (List.length prefix) j v)) in Hd.
+           destruct Hd as [vs [Ev Ha]]. subst v.
+           apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list Json) (char "[") (fun _ : unit => Bind ws (fun _ : unit => Bind elements_spec (fun vs0 : list Json => Bind ws (fun _ : unit => Bind (char "]") (fun _ : unit => Pure vs0))))) tt tt (List.length prefix) j vs)) in Ha.
+           destruct Ha as [γ1 [j1 [a [Hc Hl2]]]].
+           destruct (char_head_cons "["%char prefix w a γ1 j1 Hc) as [rest [Ew [Eg Ej]]]. subst γ1. subst w.
+           pose proof (denote_ge_json (prefix ++ "["%char :: rest) (list Json) (Bind ws (fun _ : unit => Bind elements_spec (fun vs0 : list Json => Bind ws (fun _ : unit => Bind (char "]") (fun _ : unit => Pure vs0))))) tt tt j1 j vs Hl2) as Hg. lia.
+        -- apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list (list ascii * Json)) Json JObject object_spec tt tt (List.length prefix) j v)) in Hd.
+           destruct Hd as [ms [Ev Ho]]. subst v.
+           apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list (list ascii * Json)) (char "{") (fun _ : unit => Bind ws (fun _ : unit => Bind members_spec (fun ms0 : list (list ascii * Json) => Bind ws (fun _ : unit => Bind (char "}") (fun _ : unit => Pure ms0))))) tt tt (List.length prefix) j ms)) in Ho.
+           destruct Ho as [γ1 [j1 [a [Hc Hl2]]]].
+           destruct (char_head_cons "{"%char prefix w a γ1 j1 Hc) as [rest [Ew [Eg Ej]]]. subst γ1. subst w.
+           pose proof (denote_ge_json (prefix ++ "{"%char :: rest) (list (list ascii * Json)) (Bind ws (fun _ : unit => Bind members_spec (fun ms0 : list (list ascii * Json) => Bind ws (fun _ : unit => Bind (char "}") (fun _ : unit => Pure ms0))))) tt tt j1 j ms Hl2) as Hg. lia.
+Qed.
+
+Lemma complete_value_object_array : forall w : list ascii, prod (Vst w) (prod (Ost w) (Ast w)).
+Proof.
+  apply (@well_founded_induction_type (list ascii) (fun w w' : list ascii => List.length w < List.length w') wf_lt_length (fun w => prod (Vst w) (prod (Ost w) (Ast w)))). intros w IH.
+  assert (Vst_w : Vst w).
+  { intros prefix v j Hd Hnd. unfold value_spec in Hd.
+    assert (Hw_gt : List.length w >= 1) by (apply (value_len_nonempty prefix w v j Hd)).
+    apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+    destruct Hd as [Hnull | Hd].
+    + (* null *)
+      apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit Json (fun _ : unit => JNull) (lit "null") tt tt (List.length prefix) j v)) in Hnull.
+      destruct Hnull as [u [Ev Hlit]]. subst v.
+      exists 1. split; [lia |]. change (denote json_grammar (prefix ++ w) (Map (fun _ : unit * unit => tt) (Seq (char "n") (lit "ull"))) tt (List.length prefix) u tt j) in Hlit.
+      apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "n") (lit "ull")) tt tt (List.length prefix) j u)) in Hlit.
+      destruct Hlit as [p [Em Hseq]].
+      apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char "n") (lit "ull") tt tt (List.length prefix) j p)) in Hseq.
+      destruct Hseq as [γ1 [j1 [a [b [[_ Hc] Hl]]]]].
+      apply (char_head_cons "n"%char prefix w a γ1 j1) in Hc.
+      destruct Hc as [rest [Ew [Eg Ej]]]. subst w. subst γ1. subst j1. destruct a. destruct b.
+      replace (prefix ++ "n"%char :: rest) with ((prefix ++ ["n"%char]) ++ rest) in Hl by (rewrite <- app_assoc; simpl; reflexivity).
+      replace (S (List.length prefix)) with (List.length (prefix ++ ["n"%char])) in Hl by (rewrite length_app; simpl; lia).
+      pose proof (parse_lit_complete "ull" (prefix ++ ["n"%char]) rest j Hl) as Hlr.
+      replace ((prefix ++ ["n"%char]) ++ rest) with (prefix ++ "n"%char :: rest) in Hlr by (rewrite <- app_assoc; simpl; reflexivity).
+      cbn [parse_value]. rewrite Hlr. simpl. reflexivity.
+    + apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+      destruct Hd as [Hd | Hd].
+      * apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [Hbool | Hstring].
+        -- (* bool *)
+           apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) bool Json (fun b : bool => JBool b) _ tt tt (List.length prefix) j v)) in Hbool.
+           destruct Hbool as [b [Ev Hb]]. subst v.
+           apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) bool _ _ tt tt (List.length prefix) j b)) in Hb.
+           destruct Hb as [Htrue | Hfalse].
+           ++ (* true *)
+              apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit bool (fun _ : unit => true) (lit "true") tt tt (List.length prefix) j b)) in Htrue.
+              destruct Htrue as [u [Eb Hlit]]. subst b.
+              exists 1. split; [lia |]. change (denote json_grammar (prefix ++ w) (Map (fun _ : unit * unit => tt) (Seq (char "t") (lit "rue"))) tt (List.length prefix) u tt j) in Hlit.
+              apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "t") (lit "rue")) tt tt (List.length prefix) j u)) in Hlit.
+              destruct Hlit as [p [Em Hseq]].
+              apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char "t") (lit "rue") tt tt (List.length prefix) j p)) in Hseq.
+              destruct Hseq as [γ1 [j1 [a [b' [[_ Hc] Hl]]]]].
+              apply (char_head_cons "t"%char prefix w a γ1 j1) in Hc.
+              destruct Hc as [rest [Ew [Eg Ej]]]. subst w. subst γ1. subst j1. destruct a. destruct b'.
+              replace (prefix ++ "t"%char :: rest) with ((prefix ++ ["t"%char]) ++ rest) in Hl by (rewrite <- app_assoc; simpl; reflexivity).
+              replace (S (List.length prefix)) with (List.length (prefix ++ ["t"%char])) in Hl by (rewrite length_app; simpl; lia).
+              pose proof (parse_lit_complete "rue" (prefix ++ ["t"%char]) rest j Hl) as Hlr.
+              replace ((prefix ++ ["t"%char]) ++ rest) with (prefix ++ "t"%char :: rest) in Hlr by (rewrite <- app_assoc; simpl; reflexivity).
+              cbn [parse_value]. rewrite Hlr. simpl. reflexivity.
+           ++ (* false *)
+              apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) unit bool (fun _ : unit => false) (lit "false") tt tt (List.length prefix) j b)) in Hfalse.
+              destruct Hfalse as [u [Eb Hlit]]. subst b.
+              exists 1. split; [lia |]. change (denote json_grammar (prefix ++ w) (Map (fun _ : unit * unit => tt) (Seq (char "f") (lit "alse"))) tt (List.length prefix) u tt j) in Hlit.
+              apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "f") (lit "alse")) tt tt (List.length prefix) j u)) in Hlit.
+              destruct Hlit as [p [Em Hseq]].
+              apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit unit (char "f") (lit "alse") tt tt (List.length prefix) j p)) in Hseq.
+              destruct Hseq as [γ1 [j1 [a [b' [[_ Hc] Hl]]]]].
+              apply (char_head_cons "f"%char prefix w a γ1 j1) in Hc.
+              destruct Hc as [rest [Ew [Eg Ej]]]. subst w. subst γ1. subst j1. destruct a. destruct b'.
+              replace (prefix ++ "f"%char :: rest) with ((prefix ++ ["f"%char]) ++ rest) in Hl by (rewrite <- app_assoc; simpl; reflexivity).
+              replace (S (List.length prefix)) with (List.length (prefix ++ ["f"%char])) in Hl by (rewrite length_app; simpl; lia).
+              pose proof (parse_lit_complete "alse" (prefix ++ ["f"%char]) rest j Hl) as Hlr.
+              replace ((prefix ++ ["f"%char]) ++ rest) with (prefix ++ "f"%char :: rest) in Hlr by (rewrite <- app_assoc; simpl; reflexivity).
+              cbn [parse_value]. rewrite Hlr. simpl. reflexivity.
+        -- (* string *)
+           apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list ascii) Json JString string_spec tt tt (List.length prefix) j v)) in Hstring.
+           destruct Hstring as [s [Ev Hs]]. subst v.
+           destruct w as [| c rest].
+           { rewrite app_nil_r in Hs. unfold string_spec in Hs.
+             apply (fst (denote_bind_iff ascii unit json_nt json_grammar prefix unit (list ascii) (char "034"%char) (fun _ : unit => Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034"%char) (fun _ : unit => Pure cs))) tt tt (List.length prefix) j s)) in Hs.
+             destruct Hs as [γ1 [j1 [u [Hq _]]]].
+             apply (char_denote_nth prefix "034"%char (List.length prefix) j1 u γ1) in Hq.
+             destruct Hq as [Hnth _]. rewrite (nth_error_self_none prefix) in Hnth. discriminate. }
+           pose proof (bind_char_head "034"%char (list ascii) (fun _ : unit => Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034"%char) (fun _ : unit => Pure cs))) prefix rest c s tt j Hs) as Hc34.
+           subst c.
+
+           pose proof (parse_string_complete prefix ("034"%char :: rest) s j Hs) as Hs'.
+           exists 1. split; [lia |]. cbn [parse_value]. rewrite Hs'. simpl. reflexivity.
+      * apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+        destruct Hd as [Hnumber | Hd].
+        -- (* number *)
+           apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) Z Json JNumber number_spec tt tt (List.length prefix) j v)) in Hnumber.
+           destruct Hnumber as [n [Ev Hn]]. subst v.
+           pose proof (parse_number_complete prefix w n j Hn Hnd) as Hnr.
+           pose proof (number_head prefix w n j Hn) as Hh.
+           destruct Hh as [c [rest [Ew Hdgt]]]. subst w.
+           pose proof (parse_value_digit c rest n (skipn j (prefix ++ c :: rest)) Hdgt Hnr) as Hpv.
+           exists 1. split; [lia |]. exact Hpv.
+        -- apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) Json _ _ tt tt (List.length prefix) j v)) in Hd.
+           destruct Hd as [Harray | Hobject].
+           ++ (* array *)
+              apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list Json) Json JArray array_spec tt tt (List.length prefix) j v)) in Harray.
+              destruct Harray as [vs [Ev Ha]]. subst v.
+              unfold array_spec in Ha.
+              apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list Json) (char "[") (fun _ : unit => Bind ws (fun _ : unit => Bind elements_spec (fun vs : list Json => Bind ws (fun _ : unit => Bind (char "]") (fun _ : unit => Pure vs))))) tt tt (List.length prefix) j vs)) in Ha.
+              destruct Ha as [γ1 [j1 [u [Hbracket Hbody]]]].
+              apply (char_head_cons "["%char prefix w u γ1 j1) in Hbracket.
+              destruct Hbracket as [rest [Ew [Eg Ej]]]. subst w. subst γ1. subst j1. destruct u.
+              replace (prefix ++ "["%char :: rest) with ((prefix ++ ["["%char]) ++ rest) in Hbody by (rewrite <- app_assoc; simpl; reflexivity).
+              replace (S (List.length prefix)) with (List.length (prefix ++ ["["%char])) in Hbody by (rewrite length_app; simpl; lia).
+              destruct ((snd (snd (IH rest (Nat.lt_succ_diag_r (List.length rest))))) (prefix ++ ["["%char]) vs j Hbody) as [fuel [Hfuel_le Harr]].
+              exists (S fuel). split.
+              - cbn [List.length]. lia.
+              - cbn [parse_value]. rewrite Harr. rewrite <- app_assoc. simpl. reflexivity.
+           ++ (* object *)
+              apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list (list ascii * Json)) Json JObject object_spec tt tt (List.length prefix) j v)) in Hobject.
+              destruct Hobject as [ms [Ev Ho]]. subst v.
+              unfold object_spec in Ho.
+              apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list (list ascii * Json)) (char "{") (fun _ : unit => Bind ws (fun _ : unit => Bind members_spec (fun ms : list (list ascii * Json) => Bind ws (fun _ : unit => Bind (char "}") (fun _ : unit => Pure ms))))) tt tt (List.length prefix) j ms)) in Ho.
+              destruct Ho as [γ1 [j1 [u [Hbrace Hbody]]]].
+              apply (char_head_cons "{"%char prefix w u γ1 j1) in Hbrace.
+              destruct Hbrace as [rest [Ew [Eg Ej]]]. subst w. subst γ1. subst j1. destruct u.
+              replace (prefix ++ "{"%char :: rest) with ((prefix ++ ["{"%char]) ++ rest) in Hbody by (rewrite <- app_assoc; simpl; reflexivity).
+              replace (S (List.length prefix)) with (List.length (prefix ++ ["{"%char])) in Hbody by (rewrite length_app; simpl; lia).
+              destruct ((fst (snd (IH rest (Nat.lt_succ_diag_r (List.length rest))))) (prefix ++ ["{"%char]) ms j Hbody) as [fuel [Hfuel_le Hobj]].
+              exists (S fuel). split.
+              - cbn [List.length]. lia.
+              - cbn [parse_value]. rewrite Hobj. rewrite <- app_assoc. simpl. reflexivity.
+
+  }
+  split; [exact Vst_w | split].
+  - (* object *)
+    intros prefix ms j Hd. unfold object_body_spec in Hd.
+    apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list (list ascii * Json)) ws (fun _ : unit => Bind members_spec (fun ms : list (list ascii * Json) => Bind ws (fun _ : unit => Bind (char "}") (fun _ : unit => Pure ms)))) tt tt (List.length prefix) j ms)) in Hd.
+    destruct Hd as [γ1 [j1 [u [Hws1 Hrest]]]]. destruct u, γ1.
+    apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) (list (list ascii * Json)) (list (list ascii * Json)) members_spec (fun ms0 : list (list ascii * Json) => Bind ws (fun _ : unit => Bind (char "}") (fun _ : unit => Pure ms0))) tt tt j1 j ms)) in Hrest.
+    destruct Hrest as [γ2 [j2 [ms0 [Hmem Hrest2]]]]. destruct γ2.
+    apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list (list ascii * Json)) ws (fun _ : unit => Bind (char "}") (fun _ : unit => Pure ms0)) tt tt j2 j ms)) in Hrest2.
+    destruct Hrest2 as [γ3 [j3 [u3 [Hws2 Hrest3]]]]. destruct u3, γ3.
+    apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list (list ascii * Json)) (char "}") (fun _ : unit => Pure ms0) tt tt j3 j ms)) in Hrest3.
+    destruct Hrest3 as [γ4 [j4 [u4 [Hbrace Hpure]]]].
+    apply (char_denote_nth (prefix ++ w) "}"%char j3 j4 u4 γ4) in Hbrace.
+    destruct Hbrace as [Hnth [Eu4 [Eg4 Ej4]]]. subst u4 γ4 j4.
+    apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix ++ w) (list (list ascii * Json)) ms0 tt (S j3) ms tt j)) in Hpure.
+    destruct Hpure as [[Ems0 _] Ej]. subst ms0. subst j.
+    unfold members_spec in Hmem.
+    apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) (list (list ascii * Json)) _ _ tt tt j1 j2 ms)) in Hmem.
+    destruct Hmem as [Hempty | Hcons].
+    + (* empty members *)
+      apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix ++ w) (list (list ascii * Json)) (@nil (list ascii * Json)) tt j1 ms tt j2)) in Hempty.
+      destruct Hempty as [[Ems _] Ej2]. subst ms. subst j2.
+      assert (Hnw : forall c, nth_error (prefix ++ w) j3 = Some c -> is_wsb c = false).
+      { intros c Hc. rewrite Hnth in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
+      pose proof (ws_ws_skip prefix w j1 j3 Hws1 Hws2 Hnw) as Hskip.
+      exists (S (S O)). split; [lia |]. cbn [parse_object parse_members].
+      rewrite Hskip. rewrite (skipn_cons_head ascii (prefix ++ w) j3 "}"%char Hnth). simpl. reflexivity.
+    + (* non-empty members *)
+      apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) (list ascii * Json) (list (list ascii * Json)) member_spec (fun m : list ascii * Json => Bind ws (fun _ : unit => Map (fun rest : list (list ascii * Json) => m :: rest) members_rest_spec)) tt tt j1 j2 ms)) in Hcons.
+      destruct Hcons as [γm [jm [m [Hmem0 Hrest]]]].
+      apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list (list ascii * Json)) ws (fun _ : unit => Map (fun rest : list (list ascii * Json) => m :: rest) members_rest_spec) γm tt jm j2 ms)) in Hrest.
+      destruct Hrest as [γw [jw [u [Hws_mid Hmap]]]].
+      apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list (list ascii * Json)) (list (list ascii * Json)) (fun rest : list (list ascii * Json) => m :: rest) members_rest_spec γw tt jw j2 ms)) in Hmap.
+      destruct Hmap as [ms' [Ems Hmany]].
+      unfold member_spec in Hmem0.
+      apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) (list ascii) (list ascii * Json) string_spec (fun s : list ascii => Bind ws (fun _ : unit => Bind (char ":") (fun _ : unit => Bind ws (fun _ : unit => Map (fun v : Json => (s, v)) (Call NT_value))))) tt γm j1 jm m)) in Hmem0.
+      destruct Hmem0 as [γs [js [s [Hstr Hmem1]]]].
+      apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list ascii * Json) ws (fun _ : unit => Bind (char ":") (fun _ : unit => Bind ws (fun _ : unit => Map (fun v : Json => (s, v)) (Call NT_value)))) γs γm js jm m)) in Hmem1.
+      destruct Hmem1 as [γw1 [jw1 [u1 [Hws_a Hmem2]]]].
+      apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list ascii * Json) (char ":") (fun _ : unit => Bind ws (fun _ : unit => Map (fun v : Json => (s, v)) (Call NT_value))) γw1 γm jw1 jm m)) in Hmem2.
+      destruct Hmem2 as [γc [jc [uc [Hcolon Hmem3]]]].
+      apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list ascii * Json) ws (fun _ : unit => Map (fun v : Json => (s, v)) (Call NT_value)) γc γm jc jm m)) in Hmem3.
+      destruct Hmem3 as [γw2 [jw2 [u2 [Hws_b Hmem4]]]].
+      apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) Json (list ascii * Json) (fun v : Json => (s, v)) (Call NT_value) γw2 γm jw2 jm m)) in Hmem4.
+      destruct Hmem4 as [v [Em Hcall]].
+      apply (fst (denote_call_iff ascii unit json_nt json_grammar (prefix ++ w) Json NT_value γw2 γm jw2 jm v)) in Hcall.
+      cbn [json_grammar] in Hcall.
+      subst ms. subst m.
+      destruct γs, γw1, γc, γw2, γm, γw, uc, u1, u2, u.
+      assert (Hnws_head : forall c, nth_error (prefix ++ w) j1 = Some c -> is_wsb c = false).
+      { unfold string_spec in Hstr.
+        apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list ascii) (char "034") (fun _ : unit => Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034") (fun _ : unit => Pure cs))) tt tt j1 js s)) in Hstr.
+        destruct Hstr as [γq [jq [uq [Hquote _]]]].
+        apply (char_denote_nth (prefix ++ w) "034"%char j1 jq uq γq) in Hquote.
+        destruct Hquote as [Hnth_q _].
+        intros c Hc. rewrite Hnth_q in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
+      pose proof (ws_skip prefix w j1 Hws1 Hnws_head) as Hskip1.
+      pose proof (ws_skip_j prefix w j1 Hws1 Hnws_head) as Hj1.
+      assert (Hstr' : denote json_grammar ((prefix ++ ws_part w) ++ skip_ws w) string_spec tt (List.length (prefix ++ ws_part w)) s tt js).
+      { rewrite <- app_assoc. rewrite (ws_part_skip w). rewrite length_app. rewrite <- Hj1. exact Hstr. }
+      pose proof (parse_string_complete (prefix ++ ws_part w) (skip_ws w) s js Hstr') as Hps.
+      rewrite <- app_assoc in Hps. rewrite (ws_part_skip w) in Hps.
+      apply (char_denote_nth (prefix ++ w) ":"%char jw1 jc tt tt) in Hcolon.
+      destruct Hcolon as [Hnth_colon [_ [_ Ejc]]]. subst jc.
+      assert (Hnws_colon : forall c, nth_error (prefix ++ w) jw1 = Some c -> is_wsb c = false).
+      { intros c Hc. rewrite Hnth_colon in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
+      pose proof (ws_skip_gen (prefix ++ w) js jw1 Hws_a Hnws_colon) as Hskip2.
+      pose proof (denote_ge_json (prefix ++ w) unit ws tt tt (List.length prefix) j1 tt Hws1) as Hge0.
+      pose proof (denote_ge_json (prefix ++ w) (list ascii) string_spec tt tt j1 js s Hstr) as Hge_s.
+      pose proof (denote_ge_json (prefix ++ w) unit ws tt tt js jw1 tt Hws_a) as Hge_a.
+      pose proof (denote_ge_json (prefix ++ w) unit ws tt tt (S jw1) jw2 tt Hws_b) as Hge_b.
+      assert (Hjw2_le : jw2 <= List.length (prefix ++ w)).
+      { pose proof (denote_ge_json (prefix ++ w) Json value_spec tt tt jw2 jm v Hcall) as Hge_v.
+        pose proof (denote_ge_json (prefix ++ w) unit ws tt tt jm jw tt Hws_mid) as Hge_mid.
+        pose proof (denote_ge_json (prefix ++ w) (list (list ascii * Json)) members_rest_spec tt tt jw j2 ms' Hmany) as Hge_many.
+        pose proof (denote_ge_json (prefix ++ w) unit ws tt tt j2 j3 tt Hws2) as Hge_ws2.
+        assert (Hj3lt : j3 < List.length (prefix ++ w)) by (apply (nth_error_Some (prefix ++ w) j3); rewrite Hnth; discriminate).
+        lia. }
+      assert (Hjw2_gt : List.length prefix < jw2) by lia.
+      assert (Hlt : List.length (skipn jw2 (prefix ++ w)) < List.length w).
+      { rewrite (skipn_length jw2 (prefix ++ w)). rewrite length_app. rewrite length_app in Hjw2_le. lia. }
+      assert (Hcall' : denote json_grammar (firstn jw2 (prefix ++ w) ++ skipn jw2 (prefix ++ w)) value_spec tt (List.length (firstn jw2 (prefix ++ w))) v tt jm).
+      { rewrite <- (firstn_skipn jw2 (prefix ++ w)) in Hcall. rewrite firstn_length. rewrite (Nat.min_l jw2 (List.length (prefix ++ w)) Hjw2_le). exact Hcall. }
+      assert (Hnodigit : forall c, nth_error (firstn jw2 (prefix ++ w) ++ skipn jw2 (prefix ++ w)) jm = Some c -> is_digitb c = false).
+      { intros c Hc. rewrite (firstn_skipn jw2 (prefix ++ w)) in Hc.
+        destruct (Nat.lt_ge_cases jm jw) as [Hltjmw | Hgejmw].
+        - pose proof (ws_head_char (prefix ++ w) jm jw c Hws_mid Hltjmw Hc) as Hwc. apply (ws_not_digit c Hwc).
+        - assert (Hjmw : jm = jw) by (pose proof (denote_ge_json (prefix ++ w) unit ws tt tt jm jw tt Hws_mid) as Hge5; lia). subst jw.
+          unfold members_rest_spec in Hmany.
+          apply (fst (denote_many_iff ascii unit json_nt json_grammar (prefix ++ w) (list ascii * Json) (Map snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind member_spec (fun m0 : list ascii * Json => Bind ws (fun _ : unit => Pure m0)))))) tt tt jm j2 ms')) in Hmany.
+          destruct Hmany as [Hnil | Hcons].
+          + destruct Hnil as [[_ _] Ej2]. subst j2.
+            destruct (Nat.lt_ge_cases jm j3) as [Hlt2 | Hge2].
+            * pose proof (ws_head_char (prefix ++ w) jm j3 c Hws2 Hlt2 Hc) as Hwc. apply (ws_not_digit c Hwc).
+            * assert (Hjm3 : jm = j3) by (pose proof (denote_ge_json (prefix ++ w) unit ws tt tt jm j3 tt Hws2) as Hge6; lia). subst j3. rewrite Hnth in Hc. injection Hc as Hc'. subst c. simpl. reflexivity.
+          + destruct Hcons as [m' [ms'' [γr [jr [[Ems' Hs_rest] _]]]]]. subst ms'.
+            apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * (list ascii * Json)) (list ascii * Json) snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind member_spec (fun m0 : list ascii * Json => Bind ws (fun _ : unit => Pure m0))))) tt γr jm jr m')) in Hs_rest.
+            destruct Hs_rest as [p [_ Hseq]].
+            apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list ascii * Json) (char ","%char) (Bind ws (fun _ : unit => Bind member_spec (fun m0 : list ascii * Json => Bind ws (fun _ : unit => Pure m0)))) tt γr jm jr p)) in Hseq.
+            destruct Hseq as [γc [jc [a [b [[_ Hcomma] _]]]]].
+            apply (char_denote_nth (prefix ++ w) ","%char jm jc a γc) in Hcomma.
+            destruct Hcomma as [Hnth_comma _].
+            rewrite Hnth_comma in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
+      destruct (fst (IH (skipn jw2 (prefix ++ w)) Hlt) (firstn jw2 (prefix ++ w)) v jm Hcall' Hnodigit) as [fuelv [Hfv_le Hv]].
+      rewrite (firstn_skipn jw2 (prefix ++ w)) in Hv.
+      assert (Hfold : forall (w' : list ascii), List.length w' <= List.length w ->
+        forall (prefix' : list ascii) (ms'0 : list (list ascii * Json)) (j20 jclose : nat),
+          denote json_grammar (prefix' ++ w') members_rest_spec tt (List.length prefix') ms'0 tt j20 ->
+          denote json_grammar (prefix' ++ w') ws tt j20 tt tt jclose ->
+          nth_error (prefix' ++ w') jclose = Some "}"%char ->
+          parse_members_more (3 * List.length w' + 2) (skip_ws w') = Some (ms'0, skipn jclose (prefix' ++ w'))).
+      { apply (@well_founded_induction_type (list ascii) (fun x y : list ascii => List.length x < List.length y) wf_lt_length
+            (fun w' : list ascii => List.length w' <= List.length w ->
+              forall (prefix' : list ascii) (ms'0 : list (list ascii * Json)) (j20 jclose : nat),
+                denote json_grammar (prefix' ++ w') members_rest_spec tt (List.length prefix') ms'0 tt j20 ->
+                denote json_grammar (prefix' ++ w') ws tt j20 tt tt jclose ->
+                nth_error (prefix' ++ w') jclose = Some "}"%char ->
+                parse_members_more (3 * List.length w' + 2) (skip_ws w') = Some (ms'0, skipn jclose (prefix' ++ w')))).
+        intros w' IHfold Hle_w' prefix' ms'0 j20 jclose Hmany0 Hws0 Hnth0.
+        unfold members_rest_spec in Hmany0.
+        apply (fst (denote_many_iff ascii unit json_nt json_grammar (prefix' ++ w') (list ascii * Json) (Map snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind member_spec (fun m0 : list ascii * Json => Bind ws (fun _ : unit => Pure m0)))))) tt tt (List.length prefix') j20 ms'0)) in Hmany0.
+        destruct Hmany0 as [Hnil | Hcons].
+        - (* empty members_rest *)
+          destruct Hnil as [[Ems0 _] Ej20]. subst ms'0. subst j20.
+          assert (Hnonws_close : forall c, nth_error (prefix' ++ w') jclose = Some c -> is_wsb c = false).
+          { intros c Hc. rewrite Hnth0 in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
+          pose proof (ws_skip_gen (prefix' ++ w') (List.length prefix') jclose Hws0 Hnonws_close) as Hskipm.
+          rewrite (skipn_length_app ascii prefix' w') in Hskipm.
+          replace (3 * List.length w' + 2) with (S (3 * List.length w' + 1)) by lia.
+          cbn [parse_members_more]. rewrite Hskipm. rewrite (skipn_cons_head ascii (prefix' ++ w') jclose "}"%char Hnth0). simpl. reflexivity.
+        - (* non-empty members_rest *)
+          destruct Hcons as [m' [ms'' [γr [jr [[Ems0 Hs_rest] Hmany_rest]]]]]. subst ms'0.
+          apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix' ++ w') (unit * (list ascii * Json)) (list ascii * Json) snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind member_spec (fun m0 : list ascii * Json => Bind ws (fun _ : unit => Pure m0))))) tt γr (List.length prefix') jr m')) in Hs_rest.
+          destruct Hs_rest as [p [Em' Hseq]].
+          apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix' ++ w') unit (list ascii * Json) (char ","%char) (Bind ws (fun _ : unit => Bind member_spec (fun m0 : list ascii * Json => Bind ws (fun _ : unit => Pure m0)))) tt γr (List.length prefix') jr p)) in Hseq.
+          destruct Hseq as [γc [jc [a [b [[Ep Hcomma] Hrest_member]]]]].
+          apply (char_denote_nth (prefix' ++ w') ","%char (List.length prefix') jc a γc) in Hcomma.
+          destruct Hcomma as [Hnth_comma [Ea [Egc Ejc]]]. subst a. subst γc. subst jc.
+          rewrite Ep in Em'. simpl in Em'. subst m'.
+          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') unit (list ascii * Json) ws (fun _ : unit => Bind member_spec (fun m0 : list ascii * Json => Bind ws (fun _ : unit => Pure m0))) tt γr (S (List.length prefix')) jr b)) in Hrest_member.
+          destruct Hrest_member as [γmid [jcomma [u' [Hws_comma Hrest_member2]]]]. destruct u', γmid, γr.
+          simpl in Hrest_member2.
+          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') (list ascii * Json) (list ascii * Json) member_spec (fun m0 : list ascii * Json => Bind ws (fun _ : unit => Pure m0)) tt tt jcomma jr b)) in Hrest_member2.
+          destruct Hrest_member2 as [γm2 [jm2 [m0 [Hmem_member Hrest_member3]]]].
+          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') unit (list ascii * Json) ws (fun _ : unit => Pure m0) γm2 tt jm2 jr b)) in Hrest_member3.
+          destruct Hrest_member3 as [γm3 [jm3 [u'' [Hws_after Hpure_member]]]]. destruct u'', γm3.
+          apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix' ++ w') (list ascii * Json) m0 tt jm3 b tt jr)) in Hpure_member.
+          destruct Hpure_member as [[Eb _] Ejr]. subst b. subst jr.
+          unfold member_spec in Hmem_member.
+          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') (list ascii) (list ascii * Json) string_spec (fun s_s : list ascii => Bind ws (fun _ : unit => Bind (char ":") (fun _ : unit => Bind ws (fun _ : unit => Map (fun v0 : Json => (s_s, v0)) (Call NT_value))))) tt γm2 jcomma jm2 m0)) in Hmem_member.
+          destruct Hmem_member as [γs_s [js_s [s_s [Hstr_s Hmem1]]]].
+          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') unit (list ascii * Json) ws (fun _ : unit => Bind (char ":") (fun _ : unit => Bind ws (fun _ : unit => Map (fun v0 : Json => (s_s, v0)) (Call NT_value)))) γs_s γm2 js_s jm2 m0)) in Hmem1.
+          destruct Hmem1 as [γw1_s [jw1_s [u1_s [Hws_a_s Hmem2]]]]. destruct u1_s, γs_s, γw1_s.
+          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') unit (list ascii * Json) (char ":") (fun _ : unit => Bind ws (fun _ : unit => Map (fun v0 : Json => (s_s, v0)) (Call NT_value))) tt γm2 jw1_s jm2 m0)) in Hmem2.
+          destruct Hmem2 as [γc_s [jc_s [uc_s [Hcolon_s Hmem3]]]].
+          apply (char_denote_nth (prefix' ++ w') ":"%char jw1_s jc_s uc_s γc_s) in Hcolon_s.
+          destruct Hcolon_s as [Hnth_colon_s [Euc_s [Egc_s Ejc_s]]]. subst uc_s. subst γc_s. subst jc_s.
+          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') unit (list ascii * Json) ws (fun _ : unit => Map (fun v0 : Json => (s_s, v0)) (Call NT_value)) tt γm2 (S jw1_s) jm2 m0)) in Hmem3.
+          destruct Hmem3 as [γw2_s [jw2_s [u2_s [Hws_b_s Hmem4]]]]. destruct u2_s.
+          apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix' ++ w') Json (list ascii * Json) (fun v0 : Json => (s_s, v0)) (Call NT_value) γw2_s γm2 jw2_s jm2 m0)) in Hmem4.
+          destruct Hmem4 as [v_s [Em0 Hcall_s]]. destruct γw2_s, γm2.
+          apply (fst (denote_call_iff ascii unit json_nt json_grammar (prefix' ++ w') Json NT_value tt tt jw2_s jm2 v_s)) in Hcall_s.
+          cbn [json_grammar] in Hcall_s.
+          subst m0.
+          assert (Hjcomma_le : S (List.length prefix') <= jcomma) by (pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt (S (List.length prefix')) jcomma tt Hws_comma) as Hgc; lia).
+          assert (Hjw2_s_gt : List.length prefix' < jw2_s).
+          { pose proof (denote_ge_json (prefix' ++ w') (list ascii) string_spec tt tt jcomma js_s s_s Hstr_s) as Hg1.
+            pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt js_s jw1_s tt Hws_a_s) as Hg2.
+            pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt (S jw1_s) jw2_s tt Hws_b_s) as Hg3.
+            lia. }
+          assert (Hjw2_s_le : jw2_s <= List.length (prefix' ++ w')).
+          { pose proof (denote_ge_json (prefix' ++ w') Json value_spec tt tt jw2_s jm2 v_s Hcall_s) as Hg1.
+            pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jm2 jm3 tt Hws_after) as Hg2.
+            pose proof (denote_ge_json (prefix' ++ w') (list (list ascii * Json)) members_rest_spec tt tt jm3 j20 ms'' Hmany_rest) as Hg3.
+            pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt j20 jclose tt Hws0) as Hg4.
+            assert (Hjclose_lt : jclose < List.length (prefix' ++ w')) by (apply (nth_error_Some (prefix' ++ w') jclose); rewrite Hnth0; discriminate).
+            lia. }
+          assert (Hlt_s : List.length (skipn jw2_s (prefix' ++ w')) < List.length w').
+          { rewrite (skipn_length jw2_s (prefix' ++ w')). rewrite length_app. rewrite length_app in Hjw2_s_le. lia. }
+          assert (Hcall_s' : denote json_grammar (firstn jw2_s (prefix' ++ w') ++ skipn jw2_s (prefix' ++ w')) value_spec tt (List.length (firstn jw2_s (prefix' ++ w'))) v_s tt jm2).
+          { rewrite <- (firstn_skipn jw2_s (prefix' ++ w')) in Hcall_s. rewrite firstn_length. rewrite (Nat.min_l jw2_s (List.length (prefix' ++ w')) Hjw2_s_le). exact Hcall_s. }
+          assert (Hnodigit_s : forall c, nth_error (firstn jw2_s (prefix' ++ w') ++ skipn jw2_s (prefix' ++ w')) jm2 = Some c -> is_digitb c = false).
+          { intros c Hc. rewrite (firstn_skipn jw2_s (prefix' ++ w')) in Hc.
+            destruct (Nat.lt_ge_cases jm2 jm3) as [Hlt23 | Hge23].
+            - pose proof (ws_head_char (prefix' ++ w') jm2 jm3 c Hws_after Hlt23 Hc) as Hwc. apply (ws_not_digit c Hwc).
+            - assert (Hjm2m3 : jm2 = jm3) by (pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jm2 jm3 tt Hws_after) as Hg5; lia). subst jm3.
+              unfold members_rest_spec in Hmany_rest.
+              apply (fst (denote_many_iff ascii unit json_nt json_grammar (prefix' ++ w') (list ascii * Json) (Map snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind member_spec (fun m0 : list ascii * Json => Bind ws (fun _ : unit => Pure m0)))))) tt tt jm2 j20 ms'')) in Hmany_rest.
+              destruct Hmany_rest as [Hnil | Hcons].
+              + destruct Hnil as [[_ _] Ej20]. subst j20.
+                destruct (Nat.lt_ge_cases jm2 jclose) as [Hlt2 | Hge2].
+                * pose proof (ws_head_char (prefix' ++ w') jm2 jclose c Hws0 Hlt2 Hc) as Hwc. apply (ws_not_digit c Hwc).
+                * assert (Hjm2close : jm2 = jclose) by (pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jm2 jclose tt Hws0) as Hg6; lia). subst jclose. rewrite Hnth0 in Hc. injection Hc as Hc'. subst c. simpl. reflexivity.
+              + destruct Hcons as [mm [ms''2 [γr2 [jr2 [[Ems2 Hs_rest2] _]]]]]. subst ms''.
+                apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix' ++ w') (unit * (list ascii * Json)) (list ascii * Json) snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind member_spec (fun m0 : list ascii * Json => Bind ws (fun _ : unit => Pure m0))))) tt γr2 jm2 jr2 mm)) in Hs_rest2.
+                destruct Hs_rest2 as [p2 [_ Hseq2]].
+                apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix' ++ w') unit (list ascii * Json) (char ","%char) (Bind ws (fun _ : unit => Bind member_spec (fun m0 : list ascii * Json => Bind ws (fun _ : unit => Pure m0)))) tt γr2 jm2 jr2 p2)) in Hseq2.
+                destruct Hseq2 as [γc2 [jc2 [a2 [b2 [[_ Hcomma2] _]]]]].
+                apply (char_denote_nth (prefix' ++ w') ","%char jm2 jc2 a2 γc2) in Hcomma2.
+                destruct Hcomma2 as [Hnth_comma2 _].
+                rewrite Hnth_comma2 in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
+          destruct (fst (IH (skipn jw2_s (prefix' ++ w')) (Nat.lt_le_trans _ _ _ Hlt_s Hle_w')) (firstn jw2_s (prefix' ++ w')) v_s jm2 Hcall_s' Hnodigit_s) as [fuelv_s [Hfv_s_le Hv_s]].
+          rewrite (firstn_skipn jw2_s (prefix' ++ w')) in Hv_s.
+          assert (Hjm3_le : jm3 <= List.length (prefix' ++ w')).
+          { pose proof (denote_ge_json (prefix' ++ w') (list (list ascii * Json)) members_rest_spec tt tt jm3 j20 ms'' Hmany_rest) as Hg.
+            pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt j20 jclose tt Hws0) as Hg0.
+            assert (Hjc_lt : jclose < List.length (prefix' ++ w')) by (apply (nth_error_Some (prefix' ++ w') jclose); rewrite Hnth0; discriminate).
+            lia. }
+          assert (Hjm3_gt : List.length prefix' < jm3).
+          { pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jm2 jm3 tt Hws_after) as Hg1.
+            pose proof (denote_ge_json (prefix' ++ w') Json value_spec tt tt jw2_s jm2 v_s Hcall_s) as Hg2.
+            lia. }
+          assert (Hlt_rec : List.length (skipn jm3 (prefix' ++ w')) < List.length w').
+          { rewrite (skipn_length jm3 (prefix' ++ w')). rewrite length_app. rewrite length_app in Hjm3_le. lia. }
+          assert (Hmany_rest' : denote json_grammar (firstn jm3 (prefix' ++ w') ++ skipn jm3 (prefix' ++ w')) members_rest_spec tt (List.length (firstn jm3 (prefix' ++ w'))) ms'' tt j20).
+          { rewrite (firstn_skipn jm3 (prefix' ++ w')). rewrite firstn_length. rewrite (Nat.min_l jm3 (List.length (prefix' ++ w')) Hjm3_le). exact Hmany_rest. }
+          assert (Hws0' : denote json_grammar (firstn jm3 (prefix' ++ w') ++ skipn jm3 (prefix' ++ w')) ws tt j20 tt tt jclose).
+          { rewrite (firstn_skipn jm3 (prefix' ++ w')). exact Hws0. }
+          assert (Hnth0' : nth_error (firstn jm3 (prefix' ++ w') ++ skipn jm3 (prefix' ++ w')) jclose = Some "}"%char).
+          { rewrite (firstn_skipn jm3 (prefix' ++ w')). exact Hnth0. }
+          pose proof (IHfold (skipn jm3 (prefix' ++ w')) Hlt_rec (Nat.lt_le_incl _ _ (Nat.lt_le_trans _ _ _ Hlt_rec Hle_w')) (firstn jm3 (prefix' ++ w')) ms'' j20 jclose Hmany_rest' Hws0' Hnth0') as Hrec.
+          rewrite (firstn_skipn jm3 (prefix' ++ w')) in Hrec.
+          assert (Hv_s_pad : parse_value (3 * List.length w' + 1) (skipn jw2_s (prefix' ++ w')) = Some (v_s, skipn jm2 (prefix' ++ w'))).
+          { apply (parse_value_mono fuelv_s (3 * List.length w' + 1) (skipn jw2_s (prefix' ++ w')) (v_s, skipn jm2 (prefix' ++ w'))).
+            - lia.
+            - exact Hv_s. }
+
+          assert (Hjcomma_le_len : jcomma <= List.length (prefix' ++ w')).
+          { pose proof (denote_ge_json (prefix' ++ w') (list ascii) string_spec tt tt jcomma js_s s_s Hstr_s) as Hg.
+            pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt js_s jw1_s tt Hws_a_s) as Hg1.
+            pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt (S jw1_s) jw2_s tt Hws_b_s) as Hg2.
+            pose proof (denote_ge_json (prefix' ++ w') Json value_spec tt tt jw2_s jm2 v_s Hcall_s) as Hg3.
+            pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jm2 jm3 tt Hws_after) as Hg4.
+            lia. }
+          assert (Hstr_s' : denote json_grammar ((firstn jcomma (prefix' ++ w')) ++ skipn jcomma (prefix' ++ w')) string_spec tt (List.length (firstn jcomma (prefix' ++ w'))) s_s tt js_s).
+          { rewrite (firstn_skipn jcomma (prefix' ++ w')). rewrite firstn_length. rewrite (Nat.min_l jcomma (List.length (prefix' ++ w')) Hjcomma_le_len). exact Hstr_s. }
+          pose proof (parse_string_complete (firstn jcomma (prefix' ++ w')) (skipn jcomma (prefix' ++ w')) s_s js_s Hstr_s') as Hps_s.
+          rewrite (firstn_skipn jcomma (prefix' ++ w')) in Hps_s.
+          assert (Hnws_comma_after : forall c, nth_error (prefix' ++ w') jcomma = Some c -> is_wsb c = false).
+          { unfold string_spec in Hstr_s.
+            apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') unit (list ascii) (char "034") (fun _ : unit => Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034") (fun _ : unit => Pure cs))) tt tt jcomma js_s s_s)) in Hstr_s.
+            destruct Hstr_s as [γq [jq [uq [Hquote _]]]].
+            apply (char_denote_nth (prefix' ++ w') "034"%char jcomma jq uq γq) in Hquote.
+            destruct Hquote as [Hnth_q _].
+            intros c Hc. rewrite Hnth_q in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
+          pose proof (ws_skip_gen (prefix' ++ w') (S (List.length prefix')) jcomma Hws_comma Hnws_comma_after) as Hskip_comma.
+          assert (Hnws_colon_s : forall c, nth_error (prefix' ++ w') jw1_s = Some c -> is_wsb c = false).
+          { intros c Hc. rewrite Hnth_colon_s in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
+          pose proof (ws_skip_gen (prefix' ++ w') js_s jw1_s Hws_a_s Hnws_colon_s) as Hskip_a_s.
+          assert (Hnws_val_s : forall c, nth_error (prefix' ++ w') jw2_s = Some c -> is_wsb c = false).
+          { intros c Hc. destruct (is_wsb c) eqn:E; [| reflexivity].
+            exfalso. apply (value_no_ws (firstn jw2_s (prefix' ++ w')) c (skipn (S jw2_s) (prefix' ++ w')) v_s jm2).
+            - exact E.
+            - replace (firstn jw2_s (prefix' ++ w') ++ c :: skipn (S jw2_s) (prefix' ++ w')) with (prefix' ++ w').
+              + replace (List.length (firstn jw2_s (prefix' ++ w'))) with jw2_s by (rewrite firstn_length; symmetry; apply Nat.min_l; exact Hjw2_s_le).
+                exact Hcall_s.
+              + rewrite <- (skipn_cons_head ascii (prefix' ++ w') jw2_s c Hc). rewrite (firstn_skipn jw2_s (prefix' ++ w')). reflexivity. }
+          pose proof (ws_skip_gen (prefix' ++ w') (S jw1_s) jw2_s Hws_b_s Hnws_val_s) as Hskip_b_s.
+          pose proof (skip_ws_ws (prefix' ++ w') jm2 jm3 Hws_after) as Hskip_after_s.
+          assert (Hrec_pad : parse_members_more (3 * List.length w' + 1) (skip_ws (skipn jm3 (prefix' ++ w'))) = Some (ms'', skipn jclose (prefix' ++ w'))).
+          { apply (parse_members_more_mono (3 * List.length (skipn jm3 (prefix' ++ w')) + 2) (3 * List.length w' + 1) (skip_ws (skipn jm3 (prefix' ++ w'))) (ms'', skipn jclose (prefix' ++ w'))).
+            - rewrite (skipn_length jm3 (prefix' ++ w')). rewrite length_app. lia.
+            - exact Hrec. }
+          assert (Hskip_ws_w' : skip_ws w' = ","%char :: skipn (S (List.length prefix')) (prefix' ++ w')).
+          { assert (Hcomma_nw : is_wsb ","%char = false) by (vm_compute; reflexivity).
+            pose proof (skip_ws_nonws (prefix' ++ w') (List.length prefix') ","%char Hnth_comma Hcomma_nw) as Hsw.
+            rewrite <- (skipn_length_app ascii prefix' w') at 1.
+            rewrite Hsw. rewrite (skipn_cons_head ascii (prefix' ++ w') (List.length prefix') ","%char Hnth_comma). reflexivity. }
+          replace (3 * List.length w' + 2) with (S (3 * List.length w' + 1)) by lia.
+          cbn [parse_members_more].
+          rewrite Hskip_ws_w'. cbn [parse_members_more Ascii.eqb].
+          change (skip_ws (match prefix' ++ w' with [] => [] | _ :: l => skipn (List.length prefix') l end)) with (skip_ws (skipn (S (List.length prefix')) (prefix' ++ w'))).
+          rewrite Hskip_comma. rewrite Hps_s.
+          cbn [parse_members_more Ascii.eqb].
+          rewrite Hskip_a_s. rewrite (skipn_cons_head ascii (prefix' ++ w') jw1_s ":"%char Hnth_colon_s). cbn [parse_members_more Ascii.eqb].
+          change (match prefix' ++ w' with [] => [] | _ :: l => skipn jw1_s l end) with (skipn (S jw1_s) (prefix' ++ w')).
+          rewrite Hskip_b_s. rewrite Hv_s_pad.
+          cbn [parse_members_more Ascii.eqb].
+          rewrite Hskip_after_s. rewrite Hrec_pad. cbn [parse_members_more Ascii.eqb].
+          reflexivity.
+      }
+      assert (Hjw_le : jw <= List.length (prefix ++ w)).
+      { pose proof (denote_ge_json (prefix ++ w) (list (list ascii * Json)) members_rest_spec tt tt jw j2 ms' Hmany) as Hg.
+        pose proof (denote_ge_json (prefix ++ w) unit ws tt tt j2 j3 tt Hws2) as Hg0.
+        assert (Hj3lt : j3 < List.length (prefix ++ w)) by (apply (nth_error_Some (prefix ++ w) j3); rewrite Hnth; discriminate).
+        lia. }
+      assert (Hle_w : List.length (skipn jw (prefix ++ w)) <= List.length w).
+      { rewrite (skipn_length jw (prefix ++ w)). rewrite length_app. rewrite length_app in Hjw_le.
+        pose proof (denote_ge_json (prefix ++ w) Json value_spec tt tt jw2 jm v Hcall) as Hgv.
+        pose proof (denote_ge_json (prefix ++ w) unit ws tt tt jm jw tt Hws_mid) as Hgm.
+        lia. }
+      assert (Hmany' : denote json_grammar (firstn jw (prefix ++ w) ++ skipn jw (prefix ++ w)) members_rest_spec tt (List.length (firstn jw (prefix ++ w))) ms' tt j2).
+      { rewrite (firstn_skipn jw (prefix ++ w)). rewrite firstn_length. rewrite (Nat.min_l jw (List.length (prefix ++ w)) Hjw_le). exact Hmany. }
+      assert (Hws2' : denote json_grammar (firstn jw (prefix ++ w) ++ skipn jw (prefix ++ w)) ws tt j2 tt tt j3).
+      { rewrite (firstn_skipn jw (prefix ++ w)). exact Hws2. }
+      assert (Hnth' : nth_error (firstn jw (prefix ++ w) ++ skipn jw (prefix ++ w)) j3 = Some "}"%char).
+      { rewrite (firstn_skipn jw (prefix ++ w)). exact Hnth. }
+      pose proof (Hfold (skipn jw (prefix ++ w)) Hle_w (firstn jw (prefix ++ w)) ms' j2 j3 Hmany' Hws2' Hnth') as Hrest_parse.
+      rewrite (firstn_skipn jw (prefix ++ w)) in Hrest_parse.
+      assert (Hv_pad : parse_value (3 * List.length w) (skipn jw2 (prefix ++ w)) = Some (v, skipn jm (prefix ++ w))).
+      { apply (parse_value_mono fuelv (3 * List.length w) (skipn jw2 (prefix ++ w)) (v, skipn jm (prefix ++ w))).
+        - lia.
+        - exact Hv. }
+      assert (Hrest_pad : parse_members_more (3 * List.length w) (skip_ws (skipn jw (prefix ++ w))) = Some (ms', skipn j3 (prefix ++ w))).
+      { apply (parse_members_more_mono (3 * List.length (skipn jw (prefix ++ w)) + 2) (3 * List.length w) (skip_ws (skipn jw (prefix ++ w))) (ms', skipn j3 (prefix ++ w))).
+        - rewrite (skipn_length jw (prefix ++ w)). rewrite length_app.
+          pose proof (denote_ge_json (prefix ++ w) Json value_spec tt tt jw2 jm v Hcall) as Hgv.
+          pose proof (denote_ge_json (prefix ++ w) unit ws tt tt jm jw tt Hws_mid) as Hgm.
+          lia.
+        - exact Hrest_parse. }
+      assert (Hnws_value : forall c, nth_error (prefix ++ w) jw2 = Some c -> is_wsb c = false).
+      { intros c Hc. destruct (is_wsb c) eqn:E; [| reflexivity].
+        exfalso. apply (value_no_ws (firstn jw2 (prefix ++ w)) c (skipn (S jw2) (prefix ++ w)) v jm).
+        - exact E.
+        - replace (firstn jw2 (prefix ++ w) ++ c :: skipn (S jw2) (prefix ++ w)) with (prefix ++ w).
+          + replace (List.length (firstn jw2 (prefix ++ w))) with jw2 by (rewrite firstn_length; symmetry; apply Nat.min_l; exact Hjw2_le).
+            exact Hcall.
+          + rewrite <- (skipn_cons_head ascii (prefix ++ w) jw2 c Hc). rewrite (firstn_skipn jw2 (prefix ++ w)). reflexivity. }
+      pose proof (ws_skip_gen (prefix ++ w) (S jw1) jw2 Hws_b Hnws_value) as Hskip_b_ws.
+      pose proof (skip_ws_ws (prefix ++ w) jm jw Hws_mid) as Hskip_mid.
+      assert (Hbrace_nw : is_wsb "}"%char = false) by (vm_compute; reflexivity).
+      pose proof (skip_ws_nonws (prefix ++ w) j3 "}"%char Hnth Hbrace_nw) as Hskip_trail.
+      assert (Hnth_quote : nth_error (prefix ++ w) j1 = Some "034"%char).
+      { unfold string_spec in Hstr.
+        apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list ascii) (char "034") (fun _ : unit => Bind (Many string_char_spec) (fun cs : list ascii => Bind (char "034") (fun _ : unit => Pure cs))) tt tt j1 js s)) in Hstr.
+        destruct Hstr as [γq [jq [uq [Hquote _]]]].
+        apply (char_denote_nth (prefix ++ w) "034"%char j1 jq uq γq) in Hquote.
+        destruct Hquote as [Hnth_q _]. exact Hnth_q. }
+      exists (3 * List.length w + 2). split; [lia |].
+      replace (3 * List.length w + 2) with (S (3 * List.length w + 1)) by lia.
+      replace (3 * List.length w + 1) with (S (3 * List.length w)) by lia.
+      assert (Hmembers : parse_members (S (3 * List.length w)) (skip_ws w) = Some ((s, v) :: ms', skipn j3 (prefix ++ w))).
+      { cbn [parse_members].
+        rewrite Hps. rewrite Hskip1. rewrite (skipn_cons_head ascii (prefix ++ w) j1 "034"%char Hnth_quote).
+        cbn [Ascii.eqb].
+        rewrite Hskip2. rewrite (skipn_cons_head ascii (prefix ++ w) jw1 ":"%char Hnth_colon).
+        cbn [Ascii.eqb].
+        rewrite Hskip_b_ws. rewrite Hv_pad.
+        cbn [Ascii.eqb].
+        rewrite Hskip_mid. rewrite Hrest_pad.
+        cbn [Ascii.eqb]. reflexivity. }
+      cbn [parse_object]. rewrite Hmembers.
+      cbn [Ascii.eqb]. rewrite Hskip_trail. rewrite (skipn_cons_head ascii (prefix ++ w) j3 "}"%char Hnth).
+      cbn [Ascii.eqb]. reflexivity.
+    intros prefix vs j Hd. unfold array_body_spec in Hd.
+    apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list Json) ws (fun _ : unit => Bind elements_spec (fun vs : list Json => Bind ws (fun _ : unit => Bind (char "]") (fun _ : unit => Pure vs)))) tt tt (List.length prefix) j vs)) in Hd.
+    destruct Hd as [γ1 [j1 [u [Hws1 Hrest]]]]. destruct u, γ1.
+    apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) (list Json) (list Json) elements_spec (fun vs0 : list Json => Bind ws (fun _ : unit => Bind (char "]") (fun _ : unit => Pure vs0))) tt tt j1 j vs)) in Hrest.
+    destruct Hrest as [γ2 [j2 [vs0 [Hel Hrest2]]]]. destruct γ2.
+    apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list Json) ws (fun _ : unit => Bind (char "]") (fun _ : unit => Pure vs0)) tt tt j2 j vs)) in Hrest2.
+    destruct Hrest2 as [γ3 [j3 [u3 [Hws2 Hrest3]]]]. destruct u3, γ3.
+    apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list Json) (char "]") (fun _ : unit => Pure vs0) tt tt j3 j vs)) in Hrest3.
+    destruct Hrest3 as [γ4 [j4 [u4 [Hbr Hpure]]]].
+    apply (char_denote_nth (prefix ++ w) "]"%char j3 j4 u4 γ4) in Hbr.
+    destruct Hbr as [Hnth [Eu4 [Eg4 Ej4]]]. subst u4 γ4 j4.
+    apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix ++ w) (list Json) vs0 tt (S j3) vs tt j)) in Hpure.
+    destruct Hpure as [[Evs0 _] Ej]. subst vs0. subst j.
+    unfold elements_spec in Hel.
+    apply (fst (denote_alt_iff ascii unit json_nt json_grammar (prefix ++ w) (list Json) _ _ tt tt j1 j2 vs)) in Hel.
+    destruct Hel as [Hempty | Hcons].
+    + (* empty elements *)
+      apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix ++ w) (list Json) (@nil Json) tt j1 vs tt j2)) in Hempty.
+      destruct Hempty as [[Evs _] Ej2]. subst vs. subst j2.
+      assert (Hnw : forall c, nth_error (prefix ++ w) j3 = Some c -> is_wsb c = false).
+      { intros c Hc. rewrite Hnth in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
+      pose proof (ws_ws_skip prefix w j1 j3 Hws1 Hws2 Hnw) as Hskip.
+      exists (S (S O)). split; [lia |]. cbn [parse_array parse_elements].
+      rewrite Hskip. rewrite (skipn_cons_head ascii (prefix ++ w) j3 "]"%char Hnth). simpl. reflexivity.
+    + (* non-empty elements *)
+      apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) Json (list Json) (Call NT_value) (fun v : Json => Bind ws (fun _ : unit => Map (fun rest : list Json => v :: rest) elements_rest_spec)) tt tt j1 j2 vs)) in Hcons.
+      destruct Hcons as [γv [jv [v [Hcall Hel_rest]]]].
+      apply (fst (denote_call_iff ascii unit json_nt json_grammar (prefix ++ w) Json NT_value tt γv j1 jv v)) in Hcall.
+      cbn [json_grammar] in Hcall.
+      apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix ++ w) unit (list Json) ws (fun _ : unit => Map (fun rest : list Json => v :: rest) elements_rest_spec) γv tt jv j2 vs)) in Hel_rest.
+      destruct Hel_rest as [γw [jw [u [Hws_mid Hel_map]]]].
+      apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (list Json) (list Json) (fun rest : list Json => v :: rest) elements_rest_spec γw tt jw j2 vs)) in Hel_map.
+      destruct Hel_map as [vs' [Evs Hel_rest2]]. subst vs. destruct γv, γw, u.
+      assert (Hj1_le : j1 <= List.length (prefix ++ w)).
+      { pose proof (denote_ge_json (prefix ++ w) Json value_spec tt tt j1 jv v Hcall) as Hg1.
+        pose proof (denote_ge_json (prefix ++ w) unit ws tt tt jv jw tt Hws_mid) as Hg2.
+        pose proof (denote_ge_json (prefix ++ w) (list Json) elements_rest_spec tt tt jw j2 vs' Hel_rest2) as Hg3.
+        pose proof (denote_ge_json (prefix ++ w) unit ws tt tt j2 j3 tt Hws2) as Hg4.
+        assert (Hj3lt : j3 < List.length (prefix ++ w)) by (apply (nth_error_Some (prefix ++ w) j3); rewrite Hnth; discriminate).
+        lia. }
+      assert (Hnws_head : forall c, nth_error (prefix ++ w) j1 = Some c -> is_wsb c = false).
+      { intros c Hc. destruct (is_wsb c) eqn:E; [| reflexivity].
+        exfalso. apply (value_no_ws (firstn j1 (prefix ++ w)) c (skipn (S j1) (prefix ++ w)) v jv).
+        - exact E.
+        - replace (firstn j1 (prefix ++ w) ++ c :: skipn (S j1) (prefix ++ w)) with (prefix ++ w).
+          + replace (List.length (firstn j1 (prefix ++ w))) with j1 by (rewrite firstn_length; symmetry; apply Nat.min_l; lia).
+            exact Hcall.
+          + rewrite <- (skipn_cons_head ascii (prefix ++ w) j1 c Hc). rewrite (firstn_skipn j1 (prefix ++ w)). reflexivity. }
+      pose proof (ws_skip prefix w j1 Hws1 Hnws_head) as Hskip1.
+      pose proof (ws_skip_j prefix w j1 Hws1 Hnws_head) as Hj1.
+      assert (Hcall'' : denote json_grammar ((prefix ++ ws_part w) ++ skip_ws w) value_spec tt (List.length (prefix ++ ws_part w)) v tt jv).
+      { rewrite <- app_assoc. rewrite (ws_part_skip w). rewrite length_app. rewrite <- Hj1. exact Hcall. }
+      assert (Hnodigit : forall c, nth_error (firstn j1 (prefix ++ w) ++ skipn j1 (prefix ++ w)) jv = Some c -> is_digitb c = false).
+      { intros c Hc. rewrite (firstn_skipn j1 (prefix ++ w)) in Hc.
+        destruct (Nat.lt_ge_cases jv jw) as [Hltjv | Hgejv].
+        - pose proof (ws_head_char (prefix ++ w) jv jw c Hws_mid Hltjv Hc) as Hwc. apply (ws_not_digit c Hwc).
+        - assert (Hjvj : jv = jw) by (pose proof (denote_ge_json (prefix ++ w) unit ws tt tt jv jw tt Hws_mid) as Hg; lia). subst jw.
+          unfold elements_rest_spec in Hel_rest2.
+          apply (fst (denote_many_iff ascii unit json_nt json_grammar (prefix ++ w) Json (Map snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)))))) tt tt jv j2 vs')) in Hel_rest2.
+          destruct Hel_rest2 as [Hnil | Hcons].
+          + destruct Hnil as [[_ _] Ej2]. subst j2.
+            destruct (Nat.lt_ge_cases jv j3) as [Hlt2 | Hge2].
+            * pose proof (ws_head_char (prefix ++ w) jv j3 c Hws2 Hlt2 Hc) as Hwc. apply (ws_not_digit c Hwc).
+            * assert (Hjv3 : jv = j3) by (pose proof (denote_ge_json (prefix ++ w) unit ws tt tt jv j3 tt Hws2) as Hg; lia). subst j3. rewrite Hnth in Hc. injection Hc as Hc'. subst c. simpl. reflexivity.
+          + destruct Hcons as [vv [vs'' [γr [jr [[Evs' Hs_rest] _]]]]]. subst vs'.
+            apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix ++ w) (unit * Json) Json snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0))))) tt γr jv jr vv)) in Hs_rest.
+            destruct Hs_rest as [p [_ Hseq]].
+            apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix ++ w) unit Json (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)))) tt γr jv jr p)) in Hseq.
+            destruct Hseq as [γc [jc [a [b [[_ Hcomma] _]]]]].
+            apply (char_denote_nth (prefix ++ w) ","%char jv jc a γc) in Hcomma.
+            destruct Hcomma as [Hnth_comma _].
+            rewrite Hnth_comma in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
+      assert (Hnodigit'' : forall c, nth_error ((prefix ++ ws_part w) ++ skip_ws w) jv = Some c -> is_digitb c = false).
+      { intros c Hc. rewrite <- app_assoc in Hc. rewrite (ws_part_skip w) in Hc. apply Hnodigit. rewrite (firstn_skipn j1 (prefix ++ w)). exact Hc. }
+      assert (Hvalue : {fuel : nat & prod (fuel <= 3 * List.length w) (parse_value fuel (skip_ws w) = Some (v, skipn jv (prefix ++ w)))}).
+      { destruct (ws_part w) as [| c0 wsw] eqn:Ewp.
+        - assert (Hskip_eq : skip_ws w = w) by (rewrite <- (ws_part_skip w) at 2; rewrite Ewp; reflexivity).
+          rewrite Hskip_eq in Hcall''. rewrite app_nil_r in Hcall''.
+          rewrite Hskip_eq in Hnodigit''. rewrite app_nil_r in Hnodigit''.
+          destruct (Vst_w prefix v jv Hcall'' Hnodigit'') as [fuelv [Hfv_le Hv]].
+          rewrite <- Hskip_eq in Hv at 1. exists fuelv. split; [exact Hfv_le | exact Hv].
+        - rewrite <- Ewp in Hcall''. rewrite <- Ewp in Hnodigit''.
+          assert (Hlt : List.length (skip_ws w) < List.length w).
+          { rewrite <- (ws_part_skip w) at 2. rewrite Ewp. simpl. rewrite length_app. simpl. lia. }
+          destruct (fst (IH (skip_ws w) Hlt) (prefix ++ ws_part w) v jv Hcall'' Hnodigit'') as [fuelv [Hfv_le Hv]].
+          rewrite <- app_assoc in Hv. rewrite (ws_part_skip w) in Hv.
+          exists fuelv. split; [| exact Hv].
+          assert (Hskip_le : List.length (skip_ws w) <= List.length w) by (rewrite <- (ws_part_skip w) at 2; rewrite length_app; lia).
+          lia. }
+      destruct Hvalue as [fuelv [Hfv_le Hv]].
+      assert (Hfold : forall (w' : list ascii), List.length w' <= List.length w ->
+        forall (prefix' : list ascii) (vs'0 : list Json) (j20 jclose : nat),
+          denote json_grammar (prefix' ++ w') elements_rest_spec tt (List.length prefix') vs'0 tt j20 ->
+          denote json_grammar (prefix' ++ w') ws tt j20 tt tt jclose ->
+          nth_error (prefix' ++ w') jclose = Some "]"%char ->
+          parse_elements_more (3 * List.length w' + 2) (skip_ws w') = Some (vs'0, skipn jclose (prefix' ++ w'))).
+      { apply (@well_founded_induction_type (list ascii) (fun x y : list ascii => List.length x < List.length y) wf_lt_length
+            (fun w' : list ascii => List.length w' <= List.length w ->
+              forall (prefix' : list ascii) (vs'0 : list Json) (j20 jclose : nat),
+                denote json_grammar (prefix' ++ w') elements_rest_spec tt (List.length prefix') vs'0 tt j20 ->
+                denote json_grammar (prefix' ++ w') ws tt j20 tt tt jclose ->
+                nth_error (prefix' ++ w') jclose = Some "]"%char ->
+                parse_elements_more (3 * List.length w' + 2) (skip_ws w') = Some (vs'0, skipn jclose (prefix' ++ w')))).
+        intros w' IHfold Hle_w' prefix' vs'0 j20 jclose Hmany0 Hws0 Hnth0.
+        unfold elements_rest_spec in Hmany0.
+        apply (fst (denote_many_iff ascii unit json_nt json_grammar (prefix' ++ w') Json (Map snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)))))) tt tt (List.length prefix') j20 vs'0)) in Hmany0.
+        destruct Hmany0 as [Hnil | Hcons].
+        - destruct Hnil as [[Evs0 _] Ej20]. subst vs'0. subst j20.
+          assert (Hnonws_close : forall c, nth_error (prefix' ++ w') jclose = Some c -> is_wsb c = false).
+          { intros c Hc. rewrite Hnth0 in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
+          pose proof (ws_skip_gen (prefix' ++ w') (List.length prefix') jclose Hws0 Hnonws_close) as Hskipm.
+          rewrite (skipn_length_app ascii prefix' w') in Hskipm.
+          replace (3 * List.length w' + 2) with (S (3 * List.length w' + 1)) by lia.
+          cbn [parse_elements_more]. rewrite Hskipm. rewrite (skipn_cons_head ascii (prefix' ++ w') jclose "]"%char Hnth0). reflexivity.
+        - destruct Hcons as [vv [vs'' [γr [jr [[Evs0 Hs_rest] Hmany_rest]]]]]. subst vs'0.
+          apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix' ++ w') (unit * Json) Json snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0))))) tt γr (List.length prefix') jr vv)) in Hs_rest.
+          destruct Hs_rest as [p [Evv Hseq]].
+          apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix' ++ w') unit Json (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)))) tt γr (List.length prefix') jr p)) in Hseq.
+          destruct Hseq as [γc [jc [a [b [[Ep Hcomma] Hrest_member]]]]].
+          apply (char_denote_nth (prefix' ++ w') ","%char (List.length prefix') jc a γc) in Hcomma.
+          destruct Hcomma as [Hnth_comma [Ea [Egc Ejc]]]. subst a. subst γc. subst jc.
+          rewrite Ep in Evv. simpl in Evv. subst vv.
+          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') unit Json ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0))) tt γr (S (List.length prefix')) jr b)) in Hrest_member.
+          destruct Hrest_member as [γmid [jcomma [u' [Hws_comma Hrest_member2]]]]. destruct u', γmid, γr.
+          simpl in Hrest_member2.
+          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') Json Json (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)) tt tt jcomma jr b)) in Hrest_member2.
+          destruct Hrest_member2 as [γv0 [jv0 [vv2 [Hcall2 Hrest3]]]]. destruct γv0.
+          apply (fst (denote_call_iff ascii unit json_nt json_grammar (prefix' ++ w') Json NT_value tt tt jcomma jv0 vv2)) in Hcall2.
+          cbn [json_grammar] in Hcall2.
+          apply (fst (denote_bind_iff ascii unit json_nt json_grammar (prefix' ++ w') unit Json ws (fun _ : unit => Pure vv2) tt tt jv0 jr b)) in Hrest3.
+          destruct Hrest3 as [γm3 [jm3 [u'' [Hws_after Hpure]]]]. destruct u'', γm3.
+          apply (fst (denote_pure_iff ascii unit json_nt json_grammar (prefix' ++ w') Json vv2 tt jm3 b tt jr)) in Hpure.
+          destruct Hpure as [[Eb _] Ejr]. subst b. subst jr.
+          assert (Hjcomma_le : jcomma <= List.length (prefix' ++ w')).
+          { pose proof (denote_ge_json (prefix' ++ w') Json value_spec tt tt jcomma jv0 vv2 Hcall2) as Hg1.
+            pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jv0 jm3 tt Hws_after) as Hg2.
+            pose proof (denote_ge_json (prefix' ++ w') (list Json) elements_rest_spec tt tt jm3 j20 vs'' Hmany_rest) as Hg3.
+            pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt j20 jclose tt Hws0) as Hg4.
+            assert (Hjc_lt : jclose < List.length (prefix' ++ w')) by (apply (nth_error_Some (prefix' ++ w') jclose); rewrite Hnth0; discriminate).
+            lia. }
+          assert (Hjcomma_gt : List.length prefix' < jcomma).
+          { pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt (S (List.length prefix')) jcomma tt Hws_comma) as Hg. lia. }
+          assert (Hlt_v : List.length (skipn jcomma (prefix' ++ w')) < List.length w').
+          { rewrite (skipn_length jcomma (prefix' ++ w')). rewrite length_app. rewrite length_app in Hjcomma_le. lia. }
+          assert (Hcall2' : denote json_grammar (firstn jcomma (prefix' ++ w') ++ skipn jcomma (prefix' ++ w')) value_spec tt (List.length (firstn jcomma (prefix' ++ w'))) vv2 tt jv0).
+          { rewrite (firstn_skipn jcomma (prefix' ++ w')). rewrite firstn_length. rewrite (Nat.min_l jcomma (List.length (prefix' ++ w')) Hjcomma_le). exact Hcall2. }
+          assert (Hnodigit_v : forall c, nth_error (firstn jcomma (prefix' ++ w') ++ skipn jcomma (prefix' ++ w')) jv0 = Some c -> is_digitb c = false).
+          { intros c Hc. rewrite (firstn_skipn jcomma (prefix' ++ w')) in Hc.
+            destruct (Nat.lt_ge_cases jv0 jm3) as [Hlt03 | Hge03].
+            - pose proof (ws_head_char (prefix' ++ w') jv0 jm3 c Hws_after Hlt03 Hc) as Hwc. apply (ws_not_digit c Hwc).
+            - assert (Hjv0m3 : jv0 = jm3) by (pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jv0 jm3 tt Hws_after) as Hg; lia). subst jm3.
+              unfold elements_rest_spec in Hmany_rest.
+              apply (fst (denote_many_iff ascii unit json_nt json_grammar (prefix' ++ w') Json (Map snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)))))) tt tt jv0 j20 vs'')) in Hmany_rest.
+              destruct Hmany_rest as [Hnil | Hcons2].
+              + destruct Hnil as [[_ _] Ej20]. subst j20.
+                destruct (Nat.lt_ge_cases jv0 jclose) as [Hlt2 | Hge2].
+                * pose proof (ws_head_char (prefix' ++ w') jv0 jclose c Hws0 Hlt2 Hc) as Hwc. apply (ws_not_digit c Hwc).
+                * assert (Hjv0c : jv0 = jclose) by (pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jv0 jclose tt Hws0) as Hg; lia). subst jclose. rewrite Hnth0 in Hc. injection Hc as Hc'. subst c. simpl. reflexivity.
+              + destruct Hcons2 as [vv3 [vs''2 [γr2 [jr2 [[Evs2 Hs_rest2] _]]]]]. subst vs''.
+                apply (fst (denote_map_iff ascii unit json_nt json_grammar (prefix' ++ w') (unit * Json) Json snd (Seq (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0))))) tt γr2 jv0 jr2 vv3)) in Hs_rest2.
+                destruct Hs_rest2 as [p2 [_ Hseq2]].
+                apply (fst (denote_seq_iff ascii unit json_nt json_grammar (prefix' ++ w') unit Json (char ","%char) (Bind ws (fun _ : unit => Bind (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)))) tt γr2 jv0 jr2 p2)) in Hseq2.
+                destruct Hseq2 as [γc2 [jc2 [a2 [b2 [[_ Hcomma2] _]]]]].
+                apply (char_denote_nth (prefix' ++ w') ","%char jv0 jc2 a2 γc2) in Hcomma2.
+                destruct Hcomma2 as [Hnth_comma2 _].
+                rewrite Hnth_comma2 in Hc. injection Hc as Hc'. subst c. simpl. reflexivity. }
+          destruct (fst (IH (skipn jcomma (prefix' ++ w')) (Nat.lt_le_trans _ _ _ Hlt_v Hle_w')) (firstn jcomma (prefix' ++ w')) vv2 jv0 Hcall2' Hnodigit_v) as [fuelv2 [Hfv2_le Hv2]].
+          rewrite (firstn_skipn jcomma (prefix' ++ w')) in Hv2.
+          assert (Hjm3_gt : List.length prefix' < jm3).
+          { pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt jv0 jm3 tt Hws_after) as Hg1.
+            pose proof (denote_ge_json (prefix' ++ w') Json value_spec tt tt jcomma jv0 vv2 Hcall2) as Hg2.
+            lia. }
+          assert (Hlt_rec : List.length (skipn jm3 (prefix' ++ w')) < List.length w').
+          { rewrite (skipn_length jm3 (prefix' ++ w')). rewrite length_app. rewrite length_app in Hjcomma_le. assert (Hjm3_le : jm3 <= List.length (prefix' ++ w')) by (pose proof (denote_ge_json (prefix' ++ w') (list Json) elements_rest_spec tt tt jm3 j20 vs'' Hmany_rest) as Hg; pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt j20 jclose tt Hws0) as Hg0; assert (Hjc_lt : jclose < List.length (prefix' ++ w')) by (apply (nth_error_Some (prefix' ++ w') jclose); rewrite Hnth0; discriminate); lia). lia. }
+          assert (Hmany_rest' : denote json_grammar (firstn jm3 (prefix' ++ w') ++ skipn jm3 (prefix' ++ w')) elements_rest_spec tt (List.length (firstn jm3 (prefix' ++ w'))) vs'' tt j20).
+          { rewrite (firstn_skipn jm3 (prefix' ++ w')). rewrite firstn_length. assert (Hjm3_le2 : jm3 <= List.length (prefix' ++ w')) by (pose proof (denote_ge_json (prefix' ++ w') (list Json) elements_rest_spec tt tt jm3 j20 vs'' Hmany_rest) as Hg; pose proof (denote_ge_json (prefix' ++ w') unit ws tt tt j20 jclose tt Hws0) as Hg0; assert (Hjc_lt : jclose < List.length (prefix' ++ w')) by (apply (nth_error_Some (prefix' ++ w') jclose); rewrite Hnth0; discriminate); lia). rewrite (Nat.min_l jm3 (List.length (prefix' ++ w')) Hjm3_le2). exact Hmany_rest. }
+          assert (Hws0' : denote json_grammar (firstn jm3 (prefix' ++ w') ++ skipn jm3 (prefix' ++ w')) ws tt j20 tt tt jclose).
+          { rewrite (firstn_skipn jm3 (prefix' ++ w')). exact Hws0. }
+          assert (Hnth0' : nth_error (firstn jm3 (prefix' ++ w') ++ skipn jm3 (prefix' ++ w')) jclose = Some "]"%char).
+          { rewrite (firstn_skipn jm3 (prefix' ++ w')). exact Hnth0. }
+          pose proof (IHfold (skipn jm3 (prefix' ++ w')) Hlt_rec (Nat.lt_le_incl _ _ (Nat.lt_le_trans _ _ _ Hlt_rec Hle_w')) (firstn jm3 (prefix' ++ w')) vs'' j20 jclose Hmany_rest' Hws0' Hnth0') as Hrec.
+          rewrite (firstn_skipn jm3 (prefix' ++ w')) in Hrec.
+          assert (Hrec_pad : parse_elements_more (3 * List.length w' + 1) (skip_ws (skipn jm3 (prefix' ++ w'))) = Some (vs'', skipn jclose (prefix' ++ w'))).
+          { apply (parse_elements_more_mono (3 * List.length (skipn jm3 (prefix' ++ w')) + 2) (3 * List.length w' + 1) (skip_ws (skipn jm3 (prefix' ++ w'))) (vs'', skipn jclose (prefix' ++ w'))).
+            - rewrite (skipn_length jm3 (prefix' ++ w')). rewrite length_app. lia.
+            - exact Hrec. }
+          assert (Hv2_pad : parse_value (3 * List.length w' + 1) (skipn jcomma (prefix' ++ w')) = Some (vv2, skipn jv0 (prefix' ++ w'))).
+          { apply (parse_value_mono fuelv2 (3 * List.length w' + 1) (skipn jcomma (prefix' ++ w')) (vv2, skipn jv0 (prefix' ++ w'))).
+            - lia.
+            - exact Hv2. }
+          assert (Hnws_val : forall c, nth_error (prefix' ++ w') jcomma = Some c -> is_wsb c = false).
+          { intros c Hc. destruct (is_wsb c) eqn:E; [| reflexivity].
+            exfalso. apply (value_no_ws (firstn jcomma (prefix' ++ w')) c (skipn (S jcomma) (prefix' ++ w')) vv2 jv0).
+            - exact E.
+            - replace (firstn jcomma (prefix' ++ w') ++ c :: skipn (S jcomma) (prefix' ++ w')) with (prefix' ++ w').
+              + replace (List.length (firstn jcomma (prefix' ++ w'))) with jcomma by (rewrite firstn_length; symmetry; apply Nat.min_l; exact Hjcomma_le).
+                exact Hcall2.
+              + rewrite <- (skipn_cons_head ascii (prefix' ++ w') jcomma c Hc). rewrite (firstn_skipn jcomma (prefix' ++ w')). reflexivity. }
+          pose proof (ws_skip_gen (prefix' ++ w') (S (List.length prefix')) jcomma Hws_comma Hnws_val) as Hskip_comma.
+          pose proof (skip_ws_ws (prefix' ++ w') jv0 jm3 Hws_after) as Hskip_after.
+          assert (Hskip_ws_w' : skip_ws w' = ","%char :: skipn (S (List.length prefix')) (prefix' ++ w')).
+          { assert (Hcomma_nw : is_wsb ","%char = false) by (vm_compute; reflexivity).
+            pose proof (skip_ws_nonws (prefix' ++ w') (List.length prefix') ","%char Hnth_comma Hcomma_nw) as Hsw.
+            rewrite <- (skipn_length_app ascii prefix' w') at 1.
+            exact (eq_trans Hsw (skipn_cons_head ascii (prefix' ++ w') (List.length prefix') ","%char Hnth_comma)). }
+          replace (3 * List.length w' + 2) with (S (3 * List.length w' + 1)) by lia.
+          cbn [parse_elements_more].
+          rewrite Hskip_ws_w'. cbn [parse_elements_more Ascii.eqb].
+          rewrite Hskip_comma. rewrite Hv2_pad.
+          cbn [parse_elements_more Ascii.eqb].
+          rewrite Hskip_after. rewrite Hrec_pad. cbn [parse_elements_more Ascii.eqb].
+          reflexivity.
+      }
+      assert (Hjw_le : jw <= List.length (prefix ++ w)).
+      { pose proof (denote_ge_json (prefix ++ w) (list Json) elements_rest_spec tt tt jw j2 vs' Hel_rest2) as Hg.
+        pose proof (denote_ge_json (prefix ++ w) unit ws tt tt j2 j3 tt Hws2) as Hg0.
+        assert (Hj3lt : j3 < List.length (prefix ++ w)) by (apply (nth_error_Some (prefix ++ w) j3); rewrite Hnth; discriminate).
+        lia. }
+      assert (Hle_w : List.length (skipn jw (prefix ++ w)) <= List.length w).
+      { rewrite (skipn_length jw (prefix ++ w)). rewrite length_app. rewrite length_app in Hjw_le.
+        pose proof (denote_ge_json (prefix ++ w) Json value_spec tt tt j1 jv v Hcall) as Hgv.
+        pose proof (denote_ge_json (prefix ++ w) unit ws tt tt jv jw tt Hws_mid) as Hgm.
+        lia. }
+      assert (Hel_rest2' : denote json_grammar (firstn jw (prefix ++ w) ++ skipn jw (prefix ++ w)) elements_rest_spec tt (List.length (firstn jw (prefix ++ w))) vs' tt j2).
+      { rewrite (firstn_skipn jw (prefix ++ w)). rewrite firstn_length. rewrite (Nat.min_l jw (List.length (prefix ++ w)) Hjw_le). exact Hel_rest2. }
+      assert (Hws2' : denote json_grammar (firstn jw (prefix ++ w) ++ skipn jw (prefix ++ w)) ws tt j2 tt tt j3).
+      { rewrite (firstn_skipn jw (prefix ++ w)). exact Hws2. }
+      assert (Hnth' : nth_error (firstn jw (prefix ++ w) ++ skipn jw (prefix ++ w)) j3 = Some "]"%char).
+      { rewrite (firstn_skipn jw (prefix ++ w)). exact Hnth. }
+      pose proof (Hfold (skipn jw (prefix ++ w)) Hle_w (firstn jw (prefix ++ w)) vs' j2 j3 Hel_rest2' Hws2' Hnth') as Hrest_parse.
+      rewrite (firstn_skipn jw (prefix ++ w)) in Hrest_parse.
+      assert (Hv_pad : parse_value (3 * List.length w) (skip_ws w) = Some (v, skipn jv (prefix ++ w))).
+      { apply (parse_value_mono fuelv (3 * List.length w) (skip_ws w) (v, skipn jv (prefix ++ w))).
+        - lia.
+        - exact Hv. }
+      assert (Hrest_pad : parse_elements_more (3 * List.length w) (skip_ws (skipn jw (prefix ++ w))) = Some (vs', skipn j3 (prefix ++ w))).
+      { apply (parse_elements_more_mono (3 * List.length (skipn jw (prefix ++ w)) + 2) (3 * List.length w) (skip_ws (skipn jw (prefix ++ w))) (vs', skipn j3 (prefix ++ w))).
+        - rewrite (skipn_length jw (prefix ++ w)). rewrite length_app.
+          pose proof (denote_ge_json (prefix ++ w) Json value_spec tt tt j1 jv v Hcall) as Hgv.
+          pose proof (denote_ge_json (prefix ++ w) unit ws tt tt jv jw tt Hws_mid) as Hgm.
+          assert (Hcall_vc : denote json_grammar (firstn j1 (prefix ++ w) ++ skipn j1 (prefix ++ w)) value_spec tt (List.length (firstn j1 (prefix ++ w))) v tt jv).
+          { rewrite (firstn_skipn j1 (prefix ++ w)). rewrite firstn_length. rewrite (Nat.min_l j1 (List.length (prefix ++ w)) Hj1_le). exact Hcall. }
+          pose proof (value_consumes (firstn j1 (prefix ++ w)) (skipn j1 (prefix ++ w)) v jv Hcall_vc) as Hj1ltjv.
+          rewrite firstn_length in Hj1ltjv. rewrite (Nat.min_l j1 (List.length (prefix ++ w)) Hj1_le) in Hj1ltjv.
+          assert (Hpfx_lt_jw : List.length prefix < jw) by (rewrite Hj1 in Hj1ltjv; lia).
+          rewrite length_app in Hjw_le. lia.
+        - exact Hrest_parse. }
+      pose proof (skip_ws_ws (prefix ++ w) jv jw Hws_mid) as Hskip_mid.
+      assert (Hbracket_nw : is_wsb "]"%char = false) by (vm_compute; reflexivity).
+      pose proof (skip_ws_nonws (prefix ++ w) j3 "]"%char Hnth Hbracket_nw) as Hskip_trail.
+      assert (Hcall_vc : denote json_grammar (firstn j1 (prefix ++ w) ++ skipn j1 (prefix ++ w)) value_spec tt (List.length (firstn j1 (prefix ++ w))) v tt jv).
+      { rewrite (firstn_skipn j1 (prefix ++ w)). rewrite firstn_length. rewrite (Nat.min_l j1 (List.length (prefix ++ w)) Hj1_le). exact Hcall. }
+      destruct (value_first_char (firstn j1 (prefix ++ w)) (skipn j1 (prefix ++ w)) v jv Hcall_vc) as [c [rest [Ew Hnotclose]]].
+      rewrite Hskip1 in Hv_pad. rewrite Ew in Hv_pad.
+      exists (3 * List.length w + 2). split; [lia |].
+      replace (3 * List.length w + 2) with (S (S (3 * List.length w))) by lia.
+      cbn [parse_array parse_elements].
+      rewrite Hskip1. rewrite Ew. cbn [parse_elements].
+      rewrite Hnotclose. cbn [parse_elements].
+      rewrite Hv_pad.
+      cbn [parse_elements Ascii.eqb].
+      rewrite Hskip_mid. rewrite Hrest_pad.
+      cbn [parse_elements Ascii.eqb].
+      rewrite Hskip_trail. rewrite (skipn_cons_head ascii (prefix ++ w) j3 "]"%char Hnth).
+      cbn [Ascii.eqb]. reflexivity.
+Qed.
+
+
+Lemma ws_denote_char (w : list ascii) (j : nat) (c : ascii) :
+  denote json_grammar w ws tt j tt tt (List.length w) ->
+  nth_error w j = Some c -> is_wsb c = true.
+Proof.
+  intros Hd Hnth. unfold ws in Hd.
+  apply (fst (denote_map_iff ascii unit json_nt json_grammar w (list ascii) unit (fun _ : list ascii => tt) (Many (Tok (fun c : ascii => is_wsb c = true))) tt tt j (List.length w) tt)) in Hd.
+  destruct Hd as [wsl [_ Hmany]].
+  destruct wsl as [| c0 wsl].
+  - apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii (Tok (fun c : ascii => is_wsb c = true)) tt tt j (List.length w) (@nil ascii))) in Hmany.
+    destruct Hmany as [Hnil | Hcons].
+    + destruct Hnil as [[_ _] Ej]. subst. rewrite (nth_error_self_none w) in Hnth. discriminate.
+    + destruct Hcons as [a [as' [γ'' [k [[E _] _]]]]]. discriminate.
+  - apply (fst (denote_many_iff ascii unit json_nt json_grammar w ascii (Tok (fun c : ascii => is_wsb c = true)) tt tt j (List.length w) (c0 :: wsl))) in Hmany.
+    destruct Hmany as [Hnil | Hcons].
+    + destruct Hnil as [[E _] _]. discriminate.
+    + destruct Hcons as [a [as' [γ'' [k [[E Hone] _]]]]].
+      injection E as Ea Eas. subst a as'.
+      apply (fst (denote_tok_iff ascii unit json_nt json_grammar w (fun c : ascii => is_wsb c = true) c0 tt γ'' j k)) in Hone.
+      destruct Hone as [[[_ _] Hnth'] HP].
+      rewrite Hnth' in Hnth. injection Hnth as Hc. subst c0. exact HP.
+Qed.
+
+
+(* Whole-document completeness. *)
+Lemma parse_json_complete (w : list ascii) (v : Json) :
+  denote json_grammar w json_text tt 0 v tt (List.length w) ->
+  parse_json w = Some v.
+Proof.
+  intros Hd. unfold json_text in Hd.
+  apply (fst (denote_bind_iff ascii unit json_nt json_grammar w unit Json ws (fun _ : unit => Bind (Call NT_value) (fun v : Json => Bind ws (fun _ : unit => Pure v))) tt tt 0 (List.length w) v)) in Hd.
+  destruct Hd as [γ1 [j1 [u [Hws1 Hrest]]]]. destruct u, γ1.
+  apply (fst (denote_bind_iff ascii unit json_nt json_grammar w Json Json (Call NT_value) (fun v0 : Json => Bind ws (fun _ : unit => Pure v0)) tt tt j1 (List.length w) v)) in Hrest.
+  destruct Hrest as [γ2 [j2 [v0 [Hcall Hrest2]]]]. destruct γ2.
+  apply (fst (denote_call_iff ascii unit json_nt json_grammar w Json NT_value tt tt j1 j2 v0)) in Hcall.
+  cbn [json_grammar] in Hcall.
+  apply (fst (denote_bind_iff ascii unit json_nt json_grammar w unit Json ws (fun _ : unit => Pure v0) tt tt j2 (List.length w) v)) in Hrest2.
+  destruct Hrest2 as [γ3 [j3 [u3 [Hws2 Hpure]]]]. destruct u3, γ3.
+  apply (fst (denote_pure_iff ascii unit json_nt json_grammar w Json v0 tt j3 v tt (List.length w))) in Hpure.
+  destruct Hpure as [[Ev _] Ej]. subst v0. subst j3.
+  (* leading ws maximal: j1 = length (ws_part w) *)
+  assert (Hj1 : j1 = List.length (ws_part w)).
+  { pose proof (ws_denote_j w 0 j1 Hws1) as Hle1. simpl in Hle1.
+    assert (Hge1 : List.length (ws_part w) <= j1).
+    { destruct (Nat.lt_ge_cases j1 (List.length (ws_part w))) as [Hlt | Hge]; [| exact Hge].
+      exfalso.
+      assert (Hltw : j1 < List.length w).
+      { assert (Hwslen : List.length (ws_part w) <= List.length w) by (clear; induction w; simpl; [lia |]; destruct (is_wsb a) eqn:E; simpl; lia).
+        lia. }
+      destruct (nth_error w j1) as [c |] eqn:E.
+      - pose proof (ws_part_char_ws w j1 c Hlt E) as Hwc.
+        apply (value_no_ws (firstn j1 w) c (skipn (S j1) w) v j2 Hwc).
+        replace (firstn j1 w ++ c :: skipn (S j1) w) with w by (rewrite <- (skipn_cons_head ascii w j1 c E); rewrite (firstn_skipn j1 w); reflexivity).
+        replace (List.length (firstn j1 w)) with j1 by (rewrite firstn_length; symmetry; apply Nat.min_l; lia).
+        exact Hcall.
+      - apply nth_error_None in E. lia. }
+    lia. }
+  rewrite Hj1 in Hcall.
+  assert (Hcall' : denote json_grammar (ws_part w ++ skip_ws w) value_spec tt (List.length (ws_part w)) v tt j2).
+  { rewrite (ws_part_skip w). exact Hcall. }
+  assert (Hnodigit : forall c, nth_error (ws_part w ++ skip_ws w) j2 = Some c -> is_digitb c = false).
+  { intros c Hc. apply ws_not_digit. eapply (ws_denote_char w j2 c).
+    - exact Hws2.
+    - rewrite (ws_part_skip w) in Hc. exact Hc. }
+  destruct (fst (complete_value_object_array (skip_ws w)) (ws_part w) v j2 Hcall' Hnodigit) as [fuel [Hfuel_le Hparse]].
+  rewrite (ws_part_skip w) in Hparse.
+  unfold parse_json.
+  assert (Hskip_le : List.length (skip_ws w) <= List.length w).
+  { pose proof (length_ws_part_skip w). lia. }
+  assert (Hpv : parse_value (3 * List.length w + 2) (skip_ws w) = Some (v, skipn j2 w)).
+  { apply (parse_value_mono fuel (3 * List.length w + 2) (skip_ws w) (v, skipn j2 w)).
+    - lia.
+    - exact Hparse. }
+  rewrite Hpv. simpl.
+  assert (Hnonws : forall c, nth_error w (List.length w) = Some c -> is_wsb c = false).
+  { intros c Hc. rewrite (nth_error_self_none w) in Hc. discriminate. }
+  pose proof (ws_skip_gen w j2 (List.length w) Hws2 Hnonws) as Hskip.
+  rewrite Hskip.
+  assert (Hskip_all : skipn (List.length w) w = []).
+  { apply length_zero_iff_nil. rewrite skipn_length. lia. }
+  rewrite Hskip_all. simpl. reflexivity.
+Qed.
+
+
+
 
 (* ------------------------------------------------------------------------- *)
 (* 12. Extraction: the parser compiles to OCaml                                *)
