@@ -28,6 +28,7 @@ Inductive Spec (Γ : Type) (N : Type -> Type) : Type -> Type :=
 | Bind  : forall A B, Spec Γ N A -> (A -> Spec Γ N B) -> Spec Γ N B
 | Guard : forall A, (A -> Type) -> Spec Γ N A -> Spec Γ N A
 | Many  : forall A, Spec Γ N A -> Spec Γ N (list A)
+| Exactly : forall A, nat -> Spec Γ N A -> Spec Γ N (list A)
 | Get   : Spec Γ N Γ
 | Put   : Γ -> Spec Γ N unit
 | Local : forall A, Spec Γ N A -> Spec Γ N A
@@ -42,6 +43,7 @@ Arguments Map   {Γ} {N} {A} {B} _ _.
 Arguments Bind  {Γ} {N} {A} {B} _ _.
 Arguments Guard {Γ} {N} {A} _ _.
 Arguments Many  {Γ} {N} {A} _.
+Arguments Exactly {Γ} {N} {A} _ _.
 Arguments Get   {Γ} {N}.
 Arguments Put   {Γ} {N} _.
 Arguments Local {Γ} {N} {A} _.
@@ -59,7 +61,8 @@ Inductive Progress (Γ : Type) (N : Type -> Type) : forall A, Spec Γ N A -> Typ
 | P_map    : forall A B (f : A -> B) (s : Spec Γ N A), Progress Γ N A s -> Progress Γ N B (Map f s)
 | P_bind_l : forall A B (s : Spec Γ N A) (f : A -> Spec Γ N B), Progress Γ N A s -> Progress Γ N B (Bind s f)
 | P_guard  : forall A (P : A -> Type) (s : Spec Γ N A), Progress Γ N A s -> Progress Γ N A (Guard P s)
-| P_local  : forall A (s : Spec Γ N A), Progress Γ N A s -> Progress Γ N A (Local s).
+| P_local  : forall A (s : Spec Γ N A), Progress Γ N A s -> Progress Γ N A (Local s)
+| P_exactly : forall A (n : nat) (s : Spec Γ N A), Progress Γ N A s -> Progress Γ N (list A) (Exactly (S n) s).
 
 Arguments Progress {Γ} {N} {A} _.
 
@@ -96,6 +99,11 @@ Inductive denote : forall A, Spec Γ N A -> Γ -> nat -> A -> Γ -> nat -> Type 
 | d_many_cons : forall A (s : Spec Γ N A) (γ γ' γ'' : Γ) (i j k : nat) (a : A) (as_ : list A),
     denote A s γ i a γ' j -> denote (list A) (Many s) γ' j as_ γ'' k ->
     denote (list A) (Many s) γ i (a :: as_) γ'' k
+| d_exactly_nil : forall A (s : Spec Γ N A) (γ : Γ) (i : nat),
+    denote (list A) (Exactly 0 s) γ i nil γ i
+| d_exactly_cons : forall A (n : nat) (s : Spec Γ N A) (γ γ' γ'' : Γ) (i j k : nat) (a : A) (as_ : list A),
+    denote A s γ i a γ' j -> denote (list A) (Exactly n s) γ' j as_ γ'' k ->
+    denote (list A) (Exactly (S n) s) γ i (a :: as_) γ'' k
 | d_get : forall (γ : Γ) (i : nat),
     denote Γ Get γ i γ γ i
 | d_put : forall (γ γ2 : Γ) (i : nat),
@@ -199,6 +207,21 @@ Proof.
     + left. simpl_iff.
     + right. eexists; eexists; eexists; eexists. simpl_iff.
   - intros [[[Eas Eg] Ej] | [a [as' [γ'' [k [[Eas2 d1] d2]]]]]].
+    + subst. constructor.
+    + subst. econstructor; eassumption.
+Qed.
+
+Lemma denote_exactly_iff : forall A (n : nat) (s : Spec Γ N A) (γ γ' : Γ) (i j : nat) (as_ : list A),
+  denote (Exactly n s) γ i as_ γ' j <->t
+  ((n = 0) × (as_ = nil) × (γ' = γ) × (j = i)) ⊕
+  { n' : nat & { a : A & { as' : list A & { γ'' : Γ & { k : nat &
+    (n = S n') × (as_ = a :: as') × denote s γ i a γ'' k × denote (Exactly n' s) γ'' k as' γ' j }}}}}.
+Proof.
+  intros. unfold iffT. split.
+  - intros d. invert_d.
+    + left. simpl_iff.
+    + right. eexists; eexists; eexists; eexists; eexists. simpl_iff.
+  - intros [[[[En Eas] Eg] Ej] | [n' [a [as' [γ'' [k [[[En Eas] d1] d2]]]]]]].
     + subst. constructor.
     + subst. econstructor; eassumption.
 Qed.

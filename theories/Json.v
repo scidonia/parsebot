@@ -3245,6 +3245,9 @@ Proof.
   - destruct (Nat.lt_ge_cases j k) as [Hjk | Hkj].
     + apply (IHd2 Hjk).
     + assert (k = j) by (pose proof (denote_ge_json w (list A) (Many s) γ' γ'' j k as_ d2) as Hg; lia). subst k. apply IHd1. lia.
+  - destruct (Nat.lt_ge_cases j k) as [Hjk | Hkj].
+    + apply (IHd2 Hjk).
+    + assert (k = j) by (pose proof (denote_ge_json w (list A) (@Exactly ascii unit json_nt A n s) γ' γ'' j k as_ d2) as Hg; lia). subst k. apply IHd1. lia.
   - apply IHd. exact Hlt.
   - apply IHd. exact Hlt.
 Qed.
