@@ -367,3 +367,63 @@ Proof.
   injection H as Hd Hr. subst data rest.
   apply List.firstn_skipn.
 Qed.
+
+(* The framing theorem: a chunk's payload is exactly its hex-declared size. *)
+Lemma parse_chunk_sound (prefix w : list ascii) (data rest : list ascii) :
+  parse_chunk w = Some (data, rest) ->
+  denote empty_grammar (prefix ++ w) chunk_spec tt (List.length prefix) data tt (List.length prefix + List.length w - List.length rest).
+Proof.
+  intros H. unfold parse_chunk in H.
+  destruct (parse_hex_size w) as [[n rest0] |] eqn:Ehex; [| discriminate].
+  destruct rest0 as [| c1 rest1]; [discriminate |].
+  destruct (Ascii.eqb c1 "013"%char) eqn:Ecr; [| discriminate].
+  apply Ascii.eqb_eq in Ecr. subst c1.
+  destruct rest1 as [| c2 rest2]; [discriminate |].
+  destruct (Ascii.eqb c2 "010"%char) eqn:Enl; [| discriminate].
+  apply Ascii.eqb_eq in Enl. subst c2.
+  destruct (n =? 0) eqn:En0.
+  - (* zero chunk *)
+    injection H as Hd Hr. subst data rest.
+    apply (Nat.eqb_eq n 0) in En0. subst n.
+    destruct (parse_hex_size_prefix w 0 ("013"%char :: "010"%char :: rest2) Ehex) as [ds Eprefix].
+    unfold chunk_spec. eapply d_bind.
+    + apply (parse_hex_size_sound prefix w 0 ("013"%char :: "010"%char :: rest2) Ehex).
+    + simpl. apply d_map with (a := tt).
+      replace (prefix ++ w) with ((prefix ++ ds) ++ "013"%char :: "010"%char :: rest2) by (rewrite <- Eprefix; rewrite !app_assoc; reflexivity).
+      replace (List.length prefix + List.length w - S (S (List.length rest2)))
+        with (List.length (prefix ++ ds)) by (rewrite <- Eprefix; rewrite !app_length; simpl; lia).
+      replace (List.length prefix + List.length w - List.length rest2)
+        with (S (S (List.length (prefix ++ ds)))) by (rewrite <- Eprefix; rewrite !app_length; simpl; lia).
+      apply crlf_sound.
+  - (* data chunk *)
+    destruct (parse_exactly n rest2) as [[payload rest3] |] eqn:Eex; [| discriminate].
+    destruct rest3 as [| c3 rest4]; [discriminate |].
+    destruct (Ascii.eqb c3 "013"%char) eqn:Ecr3; [| discriminate].
+    apply Ascii.eqb_eq in Ecr3. subst c3.
+    destruct rest4 as [| c4 rest5]; [discriminate |].
+    destruct (Ascii.eqb c4 "010"%char) eqn:Enl4; [| discriminate].
+    apply Ascii.eqb_eq in Enl4. subst c4.
+    injection H as Hd Hr. subst data rest.
+    destruct (parse_hex_size_prefix w n ("013"%char :: "010"%char :: rest2) Ehex) as [ds Eprefix].
+    pose proof (parse_exactly_prefix n rest2 payload ("013"%char :: "010"%char :: rest5) Eex) as Eex_prefix.
+    unfold chunk_spec. eapply d_bind.
+    + apply (parse_hex_size_sound prefix w n ("013"%char :: "010"%char :: rest2) Ehex).
+    + rewrite En0. simpl. apply d_map with (a := (tt, (payload, tt))). eapply d_seq.
+      * replace (prefix ++ w) with ((prefix ++ ds) ++ "013"%char :: "010"%char :: rest2) by (rewrite <- Eprefix; rewrite !app_assoc; reflexivity).
+        replace (List.length prefix + List.length w - S (S (List.length rest2)))
+          with (List.length (prefix ++ ds)) by (rewrite <- Eprefix; rewrite !app_length; simpl; lia).
+        apply crlf_sound.
+      * eapply d_seq.
+        -- replace (prefix ++ w) with ((prefix ++ ds ++ "013"%char :: "010"%char :: []) ++ rest2)
+             by (rewrite <- Eprefix; rewrite !app_assoc; rewrite <- (app_assoc (prefix ++ ds) ("013"%char :: "010"%char :: []) rest2); simpl; reflexivity).
+           replace (S (S (List.length (prefix ++ ds)))) with (List.length (prefix ++ ds ++ "013"%char :: "010"%char :: []))
+             by (rewrite !app_length; simpl; lia).
+           apply (parse_exactly_sound n (prefix ++ ds ++ "013"%char :: "010"%char :: []) rest2 payload ("013"%char :: "010"%char :: rest5) Eex).
+        -- replace (prefix ++ w) with ((prefix ++ ds ++ "013"%char :: "010"%char :: [] ++ payload) ++ "013"%char :: "010"%char :: rest5)
+             by (rewrite <- Eprefix; rewrite <- Eex_prefix; rewrite !app_assoc; simpl; rewrite <- (app_assoc (prefix ++ ds) ("013"%char :: "010"%char :: payload) ("013"%char :: "010"%char :: rest5)); simpl; reflexivity).
+           replace (List.length (prefix ++ ds ++ "013"%char :: "010"%char :: []) + List.length rest2 - List.length ("013"%char :: "010"%char :: rest5))
+             with (List.length (prefix ++ ds ++ "013"%char :: "010"%char :: [] ++ payload)) by (rewrite <- Eex_prefix; rewrite !app_length; simpl; lia).
+           replace (List.length prefix + List.length w - List.length rest5)
+             with (S (S (List.length (prefix ++ ds ++ "013"%char :: "010"%char :: [] ++ payload)))) by (rewrite <- Eprefix; rewrite <- Eex_prefix; rewrite !app_length; simpl; rewrite !app_length; simpl; lia).
+           apply crlf_sound.
+Qed.
