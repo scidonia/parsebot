@@ -212,3 +212,125 @@ Definition ex_input : list ascii :=
 
 Eval compute in parse_chunked_body ex_input.
 Eval compute in parse_chunk ["5"%char; "013"%char; "010"%char; "h"%char; "e"%char; "l"%char; "l"%char; "o"%char; "013"%char; "010"%char].
+
+(* ------------------------------------------------------------------------- *)
+(* 6. Soundness: the parser only produces real denotations                   *)
+(* ------------------------------------------------------------------------- *)
+
+Lemma nth_error_app_cons (x : ascii) (prefix rest : list ascii) :
+  nth_error (prefix ++ x :: rest) (List.length prefix) = Some x.
+Proof.
+  induction prefix as [| p ps IH]; simpl; [reflexivity | exact IH].
+Qed.
+
+Lemma octet_sound (c : ascii) (prefix rest : list ascii) :
+  denote empty_grammar (prefix ++ c :: rest) octet_spec tt (List.length prefix) c tt (S (List.length prefix)).
+Proof.
+  unfold octet_spec. apply d_tok; [ exact (nth_error_app_cons c prefix rest) | exact I ].
+Qed.
+
+Lemma char_sound (c : ascii) (prefix rest : list ascii) :
+  denote empty_grammar (prefix ++ c :: rest) (char c) tt (List.length prefix) tt tt (S (List.length prefix)).
+Proof.
+  unfold char. apply d_map with (a := c). apply d_tok.
+  - exact (nth_error_app_cons c prefix rest).
+  - reflexivity.
+Qed.
+
+Lemma nth_error_app_cons2 (x : ascii) (prefix rest : list ascii) :
+  nth_error (prefix ++ x :: rest) (S (List.length prefix)) = nth_error rest 0.
+Proof.
+  induction prefix as [| p ps IH]; simpl; [reflexivity | exact IH].
+Qed.
+
+Lemma app_cons_snoc (A : Type) (prefix rest : list A) (c : A) :
+  prefix ++ c :: rest = (prefix ++ c :: []) ++ rest.
+Proof.
+  intros. rewrite <- app_assoc. reflexivity.
+Qed.
+
+Lemma crlf_sound (prefix rest : list ascii) :
+  denote empty_grammar (prefix ++ "013"%char :: "010"%char :: rest) crlf tt (List.length prefix) tt tt (S (S (List.length prefix))).
+Proof.
+  unfold crlf. apply d_map with (a := (tt, tt)).
+  apply (d_seq ascii unit chunked_nt empty_grammar (prefix ++ "013"%char :: "010"%char :: rest) unit unit (char "013"%char) (char "010"%char) tt tt tt (List.length prefix) (S (List.length prefix)) (S (S (List.length prefix))) tt tt).
+  - apply char_sound.
+  - unfold char. apply d_map with (a := "010"%char). apply d_tok.
+    + rewrite nth_error_app_cons2. reflexivity.
+    + reflexivity.
+Qed.
+
+(* Many hex digits: parse_hex_rest collects digits until a non-hex char. *)
+Lemma parse_hex_rest_sound (prefix w : list ascii) (ds rest : list ascii) :
+  parse_hex_rest w = Some (ds, rest) ->
+  denote empty_grammar (prefix ++ w) (Many hex_digit_spec) tt (List.length prefix) ds tt (List.length prefix + List.length w - List.length rest).
+Proof.
+  revert prefix ds rest. induction w as [| c w' IH]; intros prefix ds rest H.
+  - cbn in H. injection H as Hds Hrest. subst ds rest.
+    simpl. replace (List.length prefix + 0 - 0) with (List.length prefix) by lia. apply d_many_nil.
+  - cbn in H. destruct (is_hex_digitb c) eqn:Ehex.
+    + remember (parse_hex_rest w') as pw eqn:Erec.
+      destruct pw as [[ds' rest'] |]; [| discriminate].
+      injection H as Hds Hrest. subst ds rest.
+      eapply d_many_cons.
+      * unfold hex_digit_spec. apply d_tok; [ exact (nth_error_app_cons c prefix w') | exact Ehex ].
+      * replace (prefix ++ c :: w') with ((prefix ++ c :: []) ++ w')
+          by (rewrite <- app_assoc; reflexivity).
+        replace (S (List.length prefix)) with (List.length (prefix ++ c :: []))
+          by (rewrite app_length; simpl; lia).
+        replace (List.length prefix + List.length (c :: w') - List.length rest')
+          with (List.length (prefix ++ c :: []) + List.length w' - List.length rest')
+          by (simpl; rewrite app_length; simpl; lia).
+        apply (IH (prefix ++ c :: []) ds' rest' eq_refl).
+    + injection H as Hds Hrest. subst ds rest.
+      simpl. replace (List.length prefix + S (List.length w') - S (List.length w')) with (List.length prefix) by lia. apply d_many_nil.
+Qed.
+
+Lemma parse_hex_size_sound (prefix w : list ascii) (n : nat) (rest : list ascii) :
+  parse_hex_size w = Some (n, rest) ->
+  denote empty_grammar (prefix ++ w) hex_natural_spec tt (List.length prefix) n tt (List.length prefix + List.length w - List.length rest).
+Proof.
+  unfold parse_hex_size. destruct w as [| c w']; [discriminate |].
+  intros H. destruct (is_hex_digitb c) eqn:Ehex; [| discriminate].
+  destruct (parse_hex_rest w') as [[ds rest'] |] eqn:Erec; [| discriminate].
+  injection H as Hn Hrest. subst n rest.
+  unfold hex_natural_spec. apply d_map with (a := (c, ds)). eapply d_seq.
+  - unfold hex_digit_spec. apply d_tok; [ exact (nth_error_app_cons c prefix w') | exact Ehex ].
+  - replace (prefix ++ c :: w') with ((prefix ++ c :: []) ++ w')
+      by (rewrite <- app_assoc; reflexivity).
+    replace (S (List.length prefix)) with (List.length (prefix ++ c :: []))
+      by (rewrite app_length; simpl; lia).
+    replace (List.length prefix + List.length (c :: w') - List.length rest')
+      with (List.length (prefix ++ c :: []) + List.length w' - List.length rest')
+      by (simpl; rewrite app_length; simpl; lia).
+    apply (parse_hex_rest_sound (prefix ++ c :: []) w' ds rest' Erec).
+Qed.
+
+(* Exactly n octets. *)
+Lemma parse_exactly_sound (n : nat) (prefix w : list ascii) (data rest : list ascii) :
+  parse_exactly n w = Some (data, rest) ->
+  denote empty_grammar (prefix ++ w) (Exactly n octet_spec) tt (List.length prefix) data tt (List.length prefix + List.length w - List.length rest).
+Proof.
+  revert prefix w data rest. induction n as [| n' IH]; intros prefix w data rest H.
+  - cbn in H. injection H as Hd Hr. subst data rest.
+    cbn. replace (List.length prefix + List.length w - List.length w) with (List.length prefix) by lia. apply d_exactly_nil.
+  - unfold parse_exactly in H. destruct (S n' <=? List.length w) eqn:Hle; [| cbn in H; discriminate].
+    rewrite Nat.leb_le in Hle.
+    destruct w as [| h tl]; [exfalso; cbn in Hle; lia |].
+    injection H as Hd Hr. subst data rest.
+    eapply d_exactly_cons.
+    + apply octet_sound.
+    + cbn [List.length].
+      replace (prefix ++ h :: tl) with ((prefix ++ h :: []) ++ tl)
+        by (rewrite <- app_assoc; reflexivity).
+      replace (S (List.length prefix)) with (List.length (prefix ++ h :: []))
+        by (rewrite app_length; simpl; lia).
+      replace (List.length prefix + S (List.length tl) - List.length (skipn n' tl))
+        with (List.length (prefix ++ h :: []) + List.length tl - List.length (skipn n' tl))
+        by (rewrite app_length; simpl; lia).
+      apply (IH (prefix ++ h :: []) tl (List.firstn n' tl) (List.skipn n' tl)).
+      assert (Hleb : (n' <=? List.length tl) = true).
+      { apply (proj2 (Nat.leb_le n' (List.length tl))). cbn in Hle. lia. }
+      unfold parse_exactly. rewrite Hleb. reflexivity.
+Qed.
+
