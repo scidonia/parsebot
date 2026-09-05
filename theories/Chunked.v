@@ -803,3 +803,69 @@ Proof.
       * inversion IH.
 
 Qed.
+
+(* The refined chunk specs are sub-derivations of the unified `chunk_spec`. *)
+Lemma denote_data_to_chunk (prefix w : list ascii) (d : list ascii) (j : nat) :
+  denote empty_grammar (prefix ++ w) data_chunk_spec tt (List.length prefix) d tt j ->
+  denote empty_grammar (prefix ++ w) chunk_spec tt (List.length prefix) d tt j.
+Proof.
+  intros Hd. unfold data_chunk_spec, chunk_spec in *.
+  pose proof (fst (denote_bind_iff ascii unit chunked_nt empty_grammar (prefix ++ w) nat (list ascii)
+      hex_natural_spec (fun n : nat => if n =? 0 then Fail
+        else Map (fun p : unit * (list ascii * unit) => fst (snd p)) (Seq crlf (Seq (Exactly n octet_spec) crlf)))
+      tt tt (List.length prefix) j d) Hd) as Hb.
+  destruct Hb as [γ' [k [n [Hn Hbody]]]]. destruct γ'.
+  destruct (n =? 0) eqn:En0.
+  - exfalso. exact (denote_fail_elim ascii unit chunked_nt empty_grammar (prefix ++ w) (list ascii) tt k d tt j Hbody).
+  - eapply d_bind. exact Hn. simpl. rewrite En0. exact Hbody.
+Qed.
+
+Lemma denote_last_to_chunk (prefix w : list ascii) (j : nat) :
+  denote empty_grammar (prefix ++ w) last_chunk_spec tt (List.length prefix) [] tt j ->
+  denote empty_grammar (prefix ++ w) chunk_spec tt (List.length prefix) [] tt j.
+Proof.
+  intros Hd. unfold last_chunk_spec, chunk_spec in *.
+  pose proof (fst (denote_bind_iff ascii unit chunked_nt empty_grammar (prefix ++ w) nat (list ascii)
+      hex_natural_spec (fun n : nat => if n =? 0 then Map (fun _ : unit => nil) crlf else Fail)
+      tt tt (List.length prefix) j []) Hd) as Hb.
+  destruct Hb as [γ' [k [n [Hn Hbody]]]]. destruct γ'.
+  destruct (n =? 0) eqn:En0.
+  - eapply d_bind. exact Hn. simpl. rewrite En0. exact Hbody.
+  - exfalso. exact (denote_fail_elim ascii unit chunked_nt empty_grammar (prefix ++ w) (list ascii) tt k [] tt j Hbody).
+Qed.
+
+(* Extract the consumed hex digits and the remaining suffix from a `Many` hex
+   derivation.  The bound `j <= length (prefix ++ consumed)` ensures the `Many`
+   does not run past `consumed` into `rest`. *)
+Lemma many_hex_prefix (prefix consumed rest : list ascii) (ds : list ascii) (j : nat) :
+  denote empty_grammar (prefix ++ consumed ++ rest) (Many hex_digit_spec) tt (List.length prefix) ds tt j ->
+  j <= List.length (prefix ++ consumed) ->
+  { rest' : list ascii & prod (consumed = ds ++ rest') (parse_hex_rest ds = Some (ds, [])) }.
+Proof.
+  revert prefix consumed rest j. induction ds as [| d ds' IH]; intros prefix consumed rest j Hd Hj.
+  - pose proof (fst (denote_many_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+        ascii hex_digit_spec tt tt (List.length prefix) j []) Hd) as Hm.
+    destruct Hm as [[[Eas Eg] Ej] | [a [as' [γ'' [k [[Eas2 Ed2] Hrest2]]]]]]; [| inversion Eas2].
+    exists consumed. split; reflexivity.
+  - pose proof (fst (denote_many_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+        ascii hex_digit_spec tt tt (List.length prefix) j (d :: ds')) Hd) as Hm.
+    destruct Hm as [[[Eas Eg] Ej] | [a [as' [γ'' [k [[Eas2 Ed] Hrest]]]]]]; [inversion Eas |].
+    injection Eas2 as Eh Et. subst a as'.
+    unfold hex_digit_spec in Ed.
+    pose proof (fst (denote_tok_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+        (fun c0 : ascii => is_hex_digitb c0 = true) d tt γ'' (List.length prefix) k) Ed) as Htok.
+    destruct Htok as [[[Eg2 Ek] Hnth] Hhex]. subst γ''. subst k.
+    destruct consumed as [| c consumed'].
+    + rewrite (app_nil_r prefix) in Hj. exfalso.
+      pose proof (denote_ge (prefix ++ rest) (list ascii) (Many hex_digit_spec) tt tt (S (List.length prefix)) j ds' Hrest) as Hge.
+      lia.
+    + simpl in Hnth. pose proof (nth_error_app_cons c prefix (consumed' ++ rest)) as Hnth'.
+      erewrite Hnth' in Hnth. injection Hnth as Hc. subst c.
+      replace (S (List.length prefix)) with (List.length (prefix ++ [d])) in Hrest by (rewrite app_length; simpl; lia).
+      replace (prefix ++ (d :: consumed') ++ rest) with ((prefix ++ [d]) ++ consumed' ++ rest) in Hrest by (rewrite <- app_assoc; reflexivity).
+      replace (List.length (prefix ++ d :: consumed')) with (List.length ((prefix ++ [d]) ++ consumed')) in Hj by (rewrite !app_length; simpl; lia).
+      destruct (IH (prefix ++ [d]) consumed' rest j Hrest Hj) as [rest' [Econsumed Erest]].
+      exists rest'. split.
+      * simpl. rewrite Econsumed. reflexivity.
+      * simpl. rewrite Hhex. rewrite Erest. reflexivity.
+Qed.
