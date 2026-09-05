@@ -101,9 +101,10 @@ Definition chunk_spec : Spec ascii unit chunked_nt (list ascii) :=
       Map (fun p : unit * (list ascii * unit) => fst (snd p))
           (Seq crlf (Seq (Exactly n octet_spec) crlf))).
 
-(* chunked-body := *chunk ; the decoded content is the concatenated payloads. *)
+(* chunked-body := *chunk CRLF ; the decoded content is the concatenated payloads. *)
 Definition chunked_body_spec : Spec ascii unit chunked_nt (list ascii) :=
-  Map (@List.concat ascii) (Many chunk_spec).
+  Map (fun p : list ascii * unit => fst p)
+      (Seq (Map (@List.concat ascii) (Many chunk_spec)) crlf).
 
 (* ------------------------------------------------------------------------- *)
 (* 4. Parser                                                                  *)
@@ -427,3 +428,119 @@ Proof.
              with (S (S (List.length (prefix ++ ds ++ "013"%char :: "010"%char :: [] ++ payload)))) by (rewrite <- Eprefix; rewrite <- Eex_prefix; rewrite !app_length; simpl; rewrite !app_length; simpl; lia).
            apply crlf_sound.
 Qed.
+
+(* A chunk consumes a prefix. *)
+Lemma parse_chunk_prefix (w : list ascii) (data rest : list ascii) :
+  parse_chunk w = Some (data, rest) -> { consumed : list ascii & consumed ++ rest = w }.
+Proof.
+  intros H. unfold parse_chunk in H.
+  destruct (parse_hex_size w) as [[n rest0] |] eqn:Ehex; [| discriminate].
+  destruct rest0 as [| c1 rest1]; [discriminate |].
+  destruct (Ascii.eqb c1 "013"%char) eqn:Ecr; [| discriminate].
+  apply Ascii.eqb_eq in Ecr. subst c1.
+  destruct rest1 as [| c2 rest2]; [discriminate |].
+  destruct (Ascii.eqb c2 "010"%char) eqn:Enl; [| discriminate].
+  apply Ascii.eqb_eq in Enl. subst c2.
+  destruct (n =? 0) eqn:En0.
+  - injection H as Hd Hr. subst data rest.
+    destruct (parse_hex_size_prefix w n ("013"%char :: "010"%char :: rest2) Ehex) as [ds Eprefix].
+    exists (ds ++ "013"%char :: "010"%char :: []). rewrite <- Eprefix.
+    rewrite <- (app_assoc ds ("013"%char :: "010"%char :: []) rest2). simpl. reflexivity.
+  - destruct (parse_exactly n rest2) as [[payload rest3] |] eqn:Eex; [| discriminate].
+    destruct rest3 as [| c3 rest4]; [discriminate |].
+    destruct (Ascii.eqb c3 "013"%char) eqn:Ecr3; [| discriminate].
+    apply Ascii.eqb_eq in Ecr3. subst c3.
+    destruct rest4 as [| c4 rest5]; [discriminate |].
+    destruct (Ascii.eqb c4 "010"%char) eqn:Enl4; [| discriminate].
+    apply Ascii.eqb_eq in Enl4. subst c4.
+    injection H as Hd Hr. subst data rest.
+    destruct (parse_hex_size_prefix w n ("013"%char :: "010"%char :: rest2) Ehex) as [ds Eprefix].
+    pose proof (parse_exactly_prefix n rest2 payload ("013"%char :: "010"%char :: rest5) Eex) as Eex_prefix.
+    exists (ds ++ "013"%char :: "010"%char :: payload ++ "013"%char :: "010"%char :: []).
+    rewrite <- Eprefix. rewrite <- Eex_prefix.
+    rewrite <- (app_assoc ds ("013"%char :: "010"%char :: payload ++ "013"%char :: "010"%char :: []) rest5).
+    simpl.
+    rewrite <- (app_assoc payload ("013"%char :: "010"%char :: []) rest5).
+    simpl. reflexivity.
+Qed.
+
+(* The chunked-body loop is a Many chunk_spec derivation. *)
+Lemma parse_body_sound (fuel : nat) (prefix w : list ascii) (data rest : list ascii) :
+  parse_body fuel w = Some (data, rest) ->
+  { chunks : list (list ascii) &
+    prod (data = List.concat chunks)
+         (denote empty_grammar (prefix ++ w) (Many chunk_spec) tt (List.length prefix) chunks tt (List.length prefix + List.length w - List.length rest)) }.
+Proof.
+  revert prefix w data rest. induction fuel as [| fuel' IH]; intros prefix w data rest H.
+  - cbn in H. discriminate.
+  - cbn in H. destruct (parse_chunk w) as [[payload rest0] |] eqn:Echunk; [| discriminate].
+    destruct payload as [| p payload'].
+    + injection H as Hd Hr. subst data rest.
+      exists [[]]. split.
+      * reflexivity.
+      * eapply d_many_cons.
+        -- exact (parse_chunk_sound prefix w [] rest0 Echunk).
+        -- apply d_many_nil.
+    + destruct (parse_body fuel' rest0) as [[rest_data rest''] |] eqn:Ebody; [| discriminate].
+      injection H as Hd Hr. subst data rest.
+      destruct (parse_chunk_prefix w (p :: payload') rest0 Echunk) as [consumed Econsumed].
+      destruct (IH (prefix ++ consumed) rest0 rest_data rest'' Ebody) as [chunks' [Econcat Hmany]].
+      exists ((p :: payload') :: chunks'). split.
+      * simpl. rewrite Econcat. reflexivity.
+      * eapply d_many_cons.
+        -- exact (parse_chunk_sound prefix w (p :: payload') rest0 Echunk).
+        -- replace (prefix ++ w) with ((prefix ++ consumed) ++ rest0)
+             by (rewrite <- Econsumed; rewrite !app_assoc; reflexivity).
+           replace (List.length prefix + List.length w - List.length rest0)
+             with (List.length (prefix ++ consumed)) by (rewrite <- Econsumed; rewrite !app_length; simpl; lia).
+           replace (List.length prefix + List.length w - List.length rest'')
+             with (List.length (prefix ++ consumed) + List.length rest0 - List.length rest'')
+             by (rewrite <- Econsumed; rewrite !app_length; simpl; lia).
+           exact Hmany.
+Qed.
+
+(* The body consumes a prefix. *)
+Lemma parse_body_prefix (fuel : nat) (w : list ascii) (data rest : list ascii) :
+  parse_body fuel w = Some (data, rest) -> { consumed : list ascii & consumed ++ rest = w }.
+Proof.
+  revert w data rest. induction fuel as [| fuel' IH]; intros w data rest H.
+  - cbn in H. discriminate.
+  - cbn in H. destruct (parse_chunk w) as [[payload rest0] |] eqn:Echunk; [| discriminate].
+    destruct payload as [| p payload'].
+    + injection H as Hd Hr. subst data rest.
+      destruct (parse_chunk_prefix w [] rest0 Echunk) as [consumed Econsumed].
+      exists consumed. exact Econsumed.
+    + destruct (parse_body fuel' rest0) as [[rest_data rest''] |] eqn:Ebody; [| discriminate].
+      injection H as Hd Hr. subst data rest.
+      destruct (parse_chunk_prefix w (p :: payload') rest0 Echunk) as [consumed Econsumed].
+      destruct (IH rest0 rest_data rest'' Ebody) as [consumed' Econsumed'].
+      exists (consumed ++ consumed'). rewrite <- Econsumed. rewrite <- Econsumed'. rewrite !app_assoc. reflexivity.
+Qed.
+
+(* Top-level: parse_chunked_body is a chunked_body_spec denotation. *)
+Lemma parse_chunked_body_sound (w : list ascii) (data : list ascii) :
+  parse_chunked_body w = Some data ->
+  denote empty_grammar w (chunked_body_spec) tt 0 data tt (List.length w).
+Proof.
+  intros H. unfold parse_chunked_body in H.
+  destruct (parse_body (3 * List.length w + 2) w) as [[data0 rest] |] eqn:Ebody; [| discriminate].
+  destruct rest as [| c1 rest1]; [discriminate |].
+  destruct rest1 as [| c2 rest2]; [discriminate |].
+  destruct rest2 as [| c3 rest3]; [| discriminate].
+  destruct (Ascii.eqb c1 "013"%char) eqn:Ecr; [| discriminate].
+  destruct (Ascii.eqb c2 "010"%char) eqn:Enl; [| discriminate].
+  apply Ascii.eqb_eq in Ecr. subst c1.
+  apply Ascii.eqb_eq in Enl. subst c2.
+  injection H as Hd. subst data.
+  destruct (parse_body_sound (3 * List.length w + 2) [] w data0 ("013"%char :: "010"%char :: []) Ebody) as [chunks [Econcat Hmany]].
+  destruct (parse_body_prefix (3 * List.length w + 2) w data0 ("013"%char :: "010"%char :: []) Ebody) as [consumed Econsumed].
+  unfold chunked_body_spec. apply d_map with (a := (data0, tt)). eapply d_seq.
+  - rewrite Econcat. apply d_map with (a := chunks). exact Hmany.
+  - replace w with (consumed ++ "013"%char :: "010"%char :: []) by (rewrite <- Econsumed; reflexivity).
+    replace (List.length [] + List.length (consumed ++ "013"%char :: "010"%char :: []) - List.length ("013"%char :: "010"%char :: []))
+      with (List.length consumed) by (rewrite !app_length; simpl; lia).
+    replace (List.length (consumed ++ "013"%char :: "010"%char :: []))
+      with (S (S (List.length consumed))) by (rewrite !app_length; simpl; lia).
+    apply (crlf_sound consumed []).
+Qed.
+
