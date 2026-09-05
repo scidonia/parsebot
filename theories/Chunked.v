@@ -334,3 +334,36 @@ Proof.
       unfold parse_exactly. rewrite Hleb. reflexivity.
 Qed.
 
+(* Consumed-prefix facts: the parser's result is a suffix of the input. *)
+Lemma parse_hex_rest_prefix (w : list ascii) (ds rest : list ascii) :
+  parse_hex_rest w = Some (ds, rest) -> ds ++ rest = w.
+Proof.
+  revert ds rest. induction w as [| c w' IH]; intros ds rest H.
+  - cbn in H. injection H as Hds Hrest. subst ds rest. reflexivity.
+  - cbn in H. destruct (is_hex_digitb c) eqn:Ehex.
+    + remember (parse_hex_rest w') as pw eqn:Erec.
+      destruct pw as [[ds' rest'] |]; [| discriminate].
+      injection H as Hds Hrest. subst ds rest.
+      specialize (IH ds' rest' eq_refl). simpl. rewrite IH. reflexivity.
+    + injection H as Hds Hrest. subst ds rest. reflexivity.
+Qed.
+
+Lemma parse_hex_size_prefix (w : list ascii) (n : nat) (rest : list ascii) :
+  parse_hex_size w = Some (n, rest) -> { ds : list ascii & ds ++ rest = w }.
+Proof.
+  unfold parse_hex_size. destruct w as [| c w']; [discriminate |].
+  intros H. destruct (is_hex_digitb c) eqn:Ehex; [| discriminate].
+  remember (parse_hex_rest w') as pw eqn:Erec.
+  destruct pw as [[ds rest'] |]; [| discriminate].
+  injection H as Hn Hrest. subst n rest.
+  exists (c :: ds). simpl. symmetry in Erec. rewrite (parse_hex_rest_prefix w' ds rest' Erec). reflexivity.
+Qed.
+
+Lemma parse_exactly_prefix (n : nat) (w : list ascii) (data rest : list ascii) :
+  parse_exactly n w = Some (data, rest) -> data ++ rest = w.
+Proof.
+  unfold parse_exactly. intros H.
+  destruct (n <=? List.length w) eqn:Hle; [| discriminate].
+  injection H as Hd Hr. subst data rest.
+  apply List.firstn_skipn.
+Qed.
