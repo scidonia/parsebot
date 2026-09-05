@@ -273,6 +273,7 @@ Arguments Map   {Token} {Γ} {N} {A} {B} _ _.
 Arguments Bind  {Token} {Γ} {N} {A} {B} _ _.
 Arguments Guard {Token} {Γ} {N} {A} _ _.
 Arguments Many  {Token} {Γ} {N} {A} _.
+Arguments Exactly {Token} {Γ} {N} {A} _ _.
 Arguments Get   {Token} {Γ} {N}.
 Arguments Put   {Token} {Γ} {N} _.
 Arguments Local {Token} {Γ} {N} {A} _.
