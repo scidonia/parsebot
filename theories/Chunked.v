@@ -869,3 +869,72 @@ Proof.
       * simpl. rewrite Econsumed. reflexivity.
       * simpl. rewrite Hhex. rewrite Erest. reflexivity.
 Qed.
+
+(* A CRLF derivation consumes exactly "\r\n". *)
+Lemma crlf_prefix (prefix consumed rest : list ascii) (j : nat) :
+  denote empty_grammar (prefix ++ consumed ++ rest) crlf tt (List.length prefix) tt tt j ->
+  j <= List.length (prefix ++ consumed) ->
+  { rest' : list ascii & prod (consumed = "013"%char :: "010"%char :: rest') (j = List.length prefix + 2) }.
+Proof.
+  intros Hd Hj. unfold crlf in Hd.
+  pose proof (fst (denote_map_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+      (unit * unit) unit (fun _ : unit * unit => tt) (Seq (char "013"%char) (char "010"%char))
+      tt tt (List.length prefix) j tt) Hd) as Hm.
+  destruct Hm as [a [Ett Hseq]].
+  pose proof (fst (denote_seq_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+      unit unit (char "013"%char) (char "010"%char) tt tt (List.length prefix) j a) Hseq) as Hs.
+  destruct Hs as [γ' [j' [u1 [u2 [[Ea Hc1] Hc2]]]]]. destruct γ'. subst a.
+  unfold char in Hc1, Hc2.
+  pose proof (fst (denote_map_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+      ascii unit (fun _ : ascii => tt) (Tok (fun c' : ascii => c' = "013"%char))
+      tt tt (List.length prefix) j' u1) Hc1) as Hm1.
+  destruct Hm1 as [t1 [Eu1 Ht1]]. subst u1.
+  pose proof (fst (denote_tok_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+      (fun c' : ascii => c' = "013"%char) t1 tt tt (List.length prefix) j') Ht1) as Htok1.
+  destruct Htok1 as [[[Eg1 Ej1] Hnth1] Pt1]. subst j'. subst t1.
+  destruct consumed as [| c1 consumed1]; [simpl in Hnth1; rewrite (app_nil_r prefix) in Hj; exfalso;
+      pose proof (denote_ge (prefix ++ rest) unit (char "010"%char) tt tt (S (List.length prefix)) j u2 Hc2) as Hge; lia |].
+  simpl in Hnth1. pose proof (nth_error_app_cons c1 prefix (consumed1 ++ rest)) as Hnth1'.
+  erewrite Hnth1' in Hnth1. injection Hnth1 as Hc1'. subst c1.
+  replace (S (List.length prefix)) with (List.length (prefix ++ ["013"%char])) in Hc2 by (rewrite app_length; simpl; lia).
+  replace (prefix ++ ("013"%char :: consumed1) ++ rest) with ((prefix ++ ["013"%char]) ++ consumed1 ++ rest) in Hc2 by (rewrite <- app_assoc; reflexivity).
+  pose proof (fst (denote_map_iff ascii unit chunked_nt empty_grammar ((prefix ++ ["013"%char]) ++ consumed1 ++ rest)
+      ascii unit (fun _ : ascii => tt) (Tok (fun c' : ascii => c' = "010"%char))
+      tt tt (List.length (prefix ++ ["013"%char])) j u2) Hc2) as Hm2.
+  destruct Hm2 as [t2 [Eu2 Ht2]]. subst u2.
+  pose proof (fst (denote_tok_iff ascii unit chunked_nt empty_grammar ((prefix ++ ["013"%char]) ++ consumed1 ++ rest)
+      (fun c' : ascii => c' = "010"%char) t2 tt tt (List.length (prefix ++ ["013"%char])) j) Ht2) as Htok2.
+  destruct Htok2 as [[[Eg2 Ej2] Hnth2] Pt2]. subst t2.
+  destruct consumed1 as [| c2 consumed2]; [simpl in Hnth2; exfalso;
+      rewrite Ej2 in Hj; rewrite !app_length in Hj; simpl in Hj; lia |].
+  simpl in Hnth2. pose proof (nth_error_app_cons c2 (prefix ++ ["013"%char]) (consumed2 ++ rest)) as Hnth2'.
+  erewrite Hnth2' in Hnth2. injection Hnth2 as Hc2'. subst c2.
+  exists consumed2. split; [reflexivity | rewrite Ej2; rewrite app_length; simpl; lia].
+Qed.
+
+(* The hex `Many` advances exactly one per digit. *)
+Lemma denote_many_length (w : list ascii) (γ γ' : unit) (i j : nat) (as_ : list ascii) :
+  denote empty_grammar w (Many hex_digit_spec) γ i as_ γ' j -> j = i + List.length as_.
+Proof.
+  revert γ γ' i j. induction as_ as [| a as' IH]; intros γ γ' i j d.
+  - pose proof (fst (denote_many_iff ascii unit chunked_nt empty_grammar w ascii hex_digit_spec γ γ' i j []) d) as Hm.
+    destruct Hm as [[[Eas Eg] Ej] | [a0 [as0 [γ0 [k [[Eas2 Ed] Hrest]]]]]]; [subst; simpl; lia | inversion Eas2].
+  - pose proof (fst (denote_many_iff ascii unit chunked_nt empty_grammar w ascii hex_digit_spec γ γ' i j (a :: as')) d) as Hm.
+    destruct Hm as [[[Eas Eg] Ej] | [a0 [as0 [γ0 [k [[Eas2 Ed] Hrest]]]]]]; [inversion Eas |].
+    injection Eas2 as Eh Et. subst a0 as0.
+    pose proof (fst (denote_tok_iff ascii unit chunked_nt empty_grammar w (fun c0 : ascii => is_hex_digitb c0 = true) a γ γ0 i k) Ed) as Htok.
+    destruct Htok as [[[Eg2 Ek] Hnth] Hhex]. subst γ0. subst k.
+    simpl. rewrite (IH γ γ' (S i) j Hrest). lia.
+Qed.
+
+(* parse_hex_size on a full input whose hex digits are a1 :: a2 and whose
+   suffix starts with a non-hex digit. *)
+Lemma parse_hex_size_with_suffix (a1 : ascii) (a2 suffix : list ascii) :
+  is_hex_digitb a1 = true -> parse_hex_rest a2 = Some (a2, []) ->
+  (forall c r', suffix = c :: r' -> is_hex_digitb c = false) ->
+  parse_hex_size (a1 :: a2 ++ suffix) = Some (hex_digits_to_nat (a1 :: a2), suffix).
+Proof.
+  intros Hhex1 Erest Hnonhex.
+  pose proof (parse_hex_rest_app_nonhex a2 suffix a2 Erest Hnonhex) as Erest'.
+  unfold parse_hex_size. simpl. rewrite Hhex1. rewrite Erest'. reflexivity.
+Qed.
