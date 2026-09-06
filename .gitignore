@@ -19,6 +19,9 @@ builddep/
 *.ml
 *.mli
 
+# hand-written benchmark drivers (tracked, not extraction output)
+!bench_*.ml
+
 # ocaml build artifacts (extracted parser bench)
 bench
 *.cmi
