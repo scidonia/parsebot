@@ -938,3 +938,228 @@ Proof.
   pose proof (parse_hex_rest_app_nonhex a2 suffix a2 Erest Hnonhex) as Erest'.
   unfold parse_hex_size. simpl. rewrite Hhex1. rewrite Erest'. reflexivity.
 Qed.
+
+
+(* The Exactly-n octets are the first n chars of the consumed input. *)
+Lemma exactly_firstn (prefix consumed rest : list ascii) (n : nat) (data : list ascii) :
+  denote empty_grammar (prefix ++ consumed ++ rest) (Exactly n octet_spec)
+    tt (List.length prefix) data tt (List.length (prefix ++ consumed)) ->
+  data = List.firstn n consumed.
+Proof.
+  revert prefix consumed rest data. induction n as [| n' IH]; intros prefix consumed rest data Hd.
+  - pose proof (fst (denote_exactly_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+        ascii 0 octet_spec tt tt (List.length prefix) (List.length (prefix ++ consumed)) data) Hd) as He.
+    destruct He as [[[[En Ed] Eg] Ej] | [n'' [a [as' [γ'' [k [[[En2 Ed2] Hoct] Hrest]]]]]]]; [| exfalso; lia].
+    subst data. simpl. reflexivity.
+  - pose proof (fst (denote_exactly_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+        ascii (S n') octet_spec tt tt (List.length prefix) (List.length (prefix ++ consumed)) data) Hd) as He.
+    destruct He as [[[[En Ed] Eg] Ej] | [n'' [a [as' [γ'' [k [[[En Ed] Hoct] Hrest]]]]]]]; [exfalso; lia |].
+    subst data. injection En as En'. subst n''.
+    unfold octet_spec in Hoct.
+    pose proof (fst (denote_tok_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+        (fun _ : ascii => True) a tt γ'' (List.length prefix) k) Hoct) as Htok.
+    destruct Htok as [[[Eg2 Ek] Hnth] _]. subst γ''. subst k.
+    destruct consumed as [| c consumed']; [simpl in Hnth; rewrite (app_nil_r prefix) in Hrest; exfalso;
+        pose proof (denote_ge (prefix ++ rest) (list ascii) (Exactly n' octet_spec) tt tt (S (List.length prefix)) (List.length prefix) as' Hrest) as Hge; lia |].
+    simpl in Hnth. pose proof (nth_error_app_cons c prefix (consumed' ++ rest)) as Hnth'.
+    erewrite Hnth' in Hnth. injection Hnth as Hc. subst c.
+    replace (S (List.length prefix)) with (List.length (prefix ++ [a])) in Hrest by (rewrite app_length; simpl; lia).
+    replace (prefix ++ (a :: consumed') ++ rest) with ((prefix ++ [a]) ++ consumed' ++ rest) in Hrest by (rewrite <- app_assoc; reflexivity).
+    replace (List.length (prefix ++ (a :: consumed'))) with (List.length ((prefix ++ [a]) ++ consumed')) in Hrest
+      by (rewrite !app_length; simpl; lia).
+    specialize (IH (prefix ++ [a]) consumed' rest as' Hrest).
+    simpl. rewrite IH. reflexivity.
+Qed.
+(* The Exactly-n octets are the first n chars of the consumed suffix, even when
+   the denotation's end is only the payload (not the whole suffix). *)
+Lemma exactly_firstn_rest (prefix rest1 rest : list ascii) (n : nat) (data : list ascii) :
+  denote empty_grammar (prefix ++ rest1 ++ rest) (Exactly n octet_spec)
+    tt (List.length prefix) data tt (List.length (prefix ++ data)) ->
+  List.length data <= List.length rest1 ->
+  data = List.firstn n rest1.
+Proof.
+  revert prefix rest1 rest data. induction n as [| n' IH]; intros prefix rest1 rest data Hd Hj.
+  - pose proof (fst (denote_exactly_iff ascii unit chunked_nt empty_grammar (prefix ++ rest1 ++ rest)
+        ascii 0 octet_spec tt tt (List.length prefix) (List.length (prefix ++ data)) data) Hd) as He.
+    destruct He as [[[[En Ed] Eg] Ej] | [n'' [a [as' [γ'' [k [[[En2 Ed2] Hoct] Hrest]]]]]]]; [| exfalso; lia].
+    subst data. simpl. reflexivity.
+  - pose proof (fst (denote_exactly_iff ascii unit chunked_nt empty_grammar (prefix ++ rest1 ++ rest)
+        ascii (S n') octet_spec tt tt (List.length prefix) (List.length (prefix ++ data)) data) Hd) as He.
+    destruct He as [[[[En Ed] Eg] Ej] | [n'' [a [as' [γ'' [k [[[En Ed] Hoct] Hrest]]]]]]]; [exfalso; lia |].
+    subst data. injection En as En'. subst n''.
+    unfold octet_spec in Hoct.
+    pose proof (fst (denote_tok_iff ascii unit chunked_nt empty_grammar (prefix ++ rest1 ++ rest)
+        (fun _ : ascii => True) a tt γ'' (List.length prefix) k) Hoct) as Htok.
+    destruct Htok as [[[Eg2 Ek] Hnth] _]. subst γ''. subst k.
+    destruct rest1 as [| c rest1']; [simpl in Hnth; simpl in Hj; exfalso; lia |].
+    simpl in Hnth. pose proof (nth_error_app_cons c prefix (rest1' ++ rest)) as Hnth'.
+    erewrite Hnth' in Hnth. injection Hnth as Hc. subst c.
+    replace (S (List.length prefix)) with (List.length (prefix ++ [a])) in Hrest by (rewrite app_length; simpl; lia).
+    replace (prefix ++ (a :: rest1') ++ rest) with ((prefix ++ [a]) ++ rest1' ++ rest) in Hrest by (rewrite <- app_assoc; reflexivity).
+    replace (List.length (prefix ++ (a :: as'))) with (List.length ((prefix ++ [a]) ++ as')) in Hrest
+      by (rewrite !app_length; simpl; lia).
+    assert (Hj' : List.length as' <= List.length rest1') by (simpl in Hj; apply le_S_n in Hj; exact Hj).
+    specialize (IH (prefix ++ [a]) rest1' rest as' Hrest Hj').
+    cbn [List.firstn]. rewrite IH. reflexivity.
+Qed.
+
+(* The Exactly-n parser advances exactly n positions. *)
+Lemma denote_exactly_length (w : list ascii) (γ γ' : unit) (i j n : nat) (as_ : list ascii) :
+  denote empty_grammar w (Exactly n octet_spec) γ i as_ γ' j -> j = i + n.
+Proof.
+  revert γ γ' i j as_. induction n as [| n' IH]; intros γ γ' i j as_ Hd.
+  - pose proof (fst (denote_exactly_iff ascii unit chunked_nt empty_grammar w ascii 0 octet_spec γ γ' i j as_) Hd) as He.
+    destruct He as [[[[En Ed] Eg] Ej] | [n'' [a [as'' [γ'' [k [[[En2 Ed2] Hoct] Hrest]]]]]]]; [subst; rewrite Nat.add_0_r; reflexivity | exfalso; lia].
+  - pose proof (fst (denote_exactly_iff ascii unit chunked_nt empty_grammar w ascii (S n') octet_spec γ γ' i j as_) Hd) as He.
+    destruct He as [[[[En Ed] Eg] Ej] | [n'' [a [as'' [γ'' [k [[[En Ed2] Hoct] Hrest]]]]]]]; [exfalso; lia |].
+    injection En as En'. subst n''.
+    unfold octet_spec in Hoct.
+    pose proof (fst (denote_tok_iff ascii unit chunked_nt empty_grammar w (fun _ : ascii => True) a γ γ'' i k) Hoct) as Htok.
+    destruct Htok as [[[Eg2 Ek] Hnth] _]. subst γ''. subst k.
+    specialize (IH γ γ' (S i) j as'' Hrest). rewrite IH. simpl. rewrite Nat.add_succ_r. reflexivity.
+Qed.
+
+
+(* The Exactly-n parser produces exactly n octets. *)
+Lemma denote_exactly_len (w : list ascii) (γ γ' : unit) (i j n : nat) (as_ : list ascii) :
+  denote empty_grammar w (Exactly n octet_spec) γ i as_ γ' j -> List.length as_ = n.
+Proof.
+  revert γ γ' i j as_. induction n as [| n' IH]; intros γ γ' i j as_ Hd.
+  - pose proof (fst (denote_exactly_iff ascii unit chunked_nt empty_grammar w ascii 0 octet_spec γ γ' i j as_) Hd) as He.
+    destruct He as [[[[En Ed] Eg] Ej] | [n'' [a [as'' [γ'' [k [[[En2 Ed2] Hoct] Hrest]]]]]]]; [subst; reflexivity | exfalso; lia].
+  - pose proof (fst (denote_exactly_iff ascii unit chunked_nt empty_grammar w ascii (S n') octet_spec γ γ' i j as_) Hd) as He.
+    destruct He as [[[[En Ed] Eg] Ej] | [n'' [a [as'' [γ'' [k [[[En Ed2] Hoct] Hrest]]]]]]]; [exfalso; lia |].
+    injection En as En'. subst n''.
+    unfold octet_spec in Hoct.
+    pose proof (fst (denote_tok_iff ascii unit chunked_nt empty_grammar w (fun _ : ascii => True) a γ γ'' i k) Hoct) as Htok.
+    destruct Htok as [[[Eg2 Ek] Hnth] _]. subst γ''. subst k.
+    specialize (IH γ γ' (S i) j as'' Hrest). subst as_. simpl. rewrite IH. reflexivity.
+Qed.
+
+
+(* A chunk denotation is accepted by parse_chunk. *)
+Lemma parse_chunk_complete (prefix consumed rest : list ascii) (data : list ascii) :
+  denote empty_grammar (prefix ++ consumed ++ rest) chunk_spec
+    tt (List.length prefix) data tt (List.length (prefix ++ consumed)) ->
+  parse_chunk (consumed ++ rest) = Some (data, rest).
+Proof.
+  intros Hd. unfold chunk_spec in Hd.
+  pose proof (fst (denote_bind_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest) nat (list ascii)
+      hex_natural_spec (fun n : nat => if n =? 0 then Map (fun _ : unit => nil) crlf
+        else Map (fun p : unit * (list ascii * unit) => fst (snd p)) (Seq crlf (Seq (Exactly n octet_spec) crlf)))
+      tt tt (List.length prefix) (List.length (prefix ++ consumed)) data) Hd) as Hb.
+  destruct Hb as [γ1 [j1 [n [Hn Hbody]]]]. destruct γ1.
+  unfold hex_natural_spec in Hn.
+  pose proof (fst (denote_map_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+      (ascii * list ascii) nat (fun p : ascii * list ascii => hex_digits_to_nat (fst p :: snd p))
+      (Seq hex_digit_spec (Many hex_digit_spec)) tt tt (List.length prefix) j1 n) Hn) as Hm.
+  destruct Hm as [p [En Hseq]].
+  pose proof (fst (denote_seq_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+      ascii (list ascii) hex_digit_spec (Many hex_digit_spec) tt tt (List.length prefix) j1 p) Hseq) as Hs.
+  destruct Hs as [γ2 [j2 [a1 [a2 [[Ep Ehex] Hmany]]]]]. destruct γ2. subst p. simpl in En.
+  unfold hex_digit_spec in Ehex.
+  pose proof (fst (denote_tok_iff ascii unit chunked_nt empty_grammar (prefix ++ consumed ++ rest)
+      (fun c0 : ascii => is_hex_digitb c0 = true) a1 tt tt (List.length prefix) j2) Ehex) as Htok.
+  destruct Htok as [[[Eg3 Ej3] Hnth] Hhex1]. subst j2.
+  pose proof (denote_ge (prefix ++ consumed ++ rest) (list ascii)
+      (if n =? 0 then Map (fun _ : unit => nil) crlf
+       else Map (fun p : unit * (list ascii * unit) => fst (snd p)) (Seq crlf (Seq (Exactly n octet_spec) crlf)))
+      tt tt j1 (List.length (prefix ++ consumed)) data Hbody) as Hj1.
+  destruct consumed as [| c consumed']; [simpl in Hnth; rewrite (app_nil_r prefix) in Hj1; exfalso;
+      pose proof (denote_ge (prefix ++ rest) (list ascii) (Many hex_digit_spec) tt tt (S (List.length prefix)) j1 a2 Hmany) as Hge; lia |].
+  simpl in Hnth. pose proof (nth_error_app_cons c prefix (consumed' ++ rest)) as Hnth'.
+  erewrite Hnth' in Hnth. injection Hnth as Hc. subst c.
+  replace (S (List.length prefix)) with (List.length (prefix ++ [a1])) in Hmany by (rewrite app_length; simpl; lia).
+  replace (prefix ++ (a1 :: consumed') ++ rest) with ((prefix ++ [a1]) ++ consumed' ++ rest) in Hmany by (rewrite <- app_assoc; reflexivity).
+  replace (List.length (prefix ++ a1 :: consumed')) with (List.length ((prefix ++ [a1]) ++ consumed')) in Hj1
+    by (rewrite !app_length; simpl; lia).
+  destruct (many_hex_prefix (prefix ++ [a1]) consumed' rest a2 j1 Hmany Hj1) as [chunk_rest [Econsumed Erest]].
+  pose proof (denote_many_length ((prefix ++ [a1]) ++ consumed' ++ rest) tt tt (List.length (prefix ++ [a1])) j1 a2 Hmany) as Ej1.
+  subst n.
+  assert (Econsumed_full : (a1 :: consumed') = (a1 :: a2) ++ chunk_rest) by (simpl; rewrite Econsumed; reflexivity).
+  destruct (hex_digits_to_nat (a1 :: a2) =? 0) eqn:En0.
+  - (* zero chunk *)
+    pose proof (fst (denote_map_iff ascii unit chunked_nt empty_grammar (prefix ++ (a1 :: consumed') ++ rest)
+        unit (list ascii) (fun _ : unit => nil) crlf tt tt j1 (List.length (prefix ++ (a1 :: consumed'))) data) Hbody) as Hmz.
+    destruct Hmz as [uz [Ed Hcrlf]]. destruct uz. simpl in Ed. subst data.
+    replace (prefix ++ (a1 :: consumed') ++ rest) with ((prefix ++ (a1 :: a2)) ++ chunk_rest ++ rest) in Hcrlf by (rewrite Econsumed_full; rewrite !app_assoc; reflexivity).
+    replace j1 with (List.length (prefix ++ (a1 :: a2))) in Hcrlf by (rewrite Ej1; rewrite !app_length; simpl; lia).
+    destruct (crlf_prefix (prefix ++ (a1 :: a2)) chunk_rest rest (List.length (prefix ++ (a1 :: consumed'))) Hcrlf) as [rest'' [Ecrlf Ejc]].
+    { rewrite Econsumed. rewrite !app_length. simpl. rewrite !app_length. lia. }
+    subst chunk_rest.
+    assert (Hnonhex : forall c r', ("013"%char :: "010"%char :: rest'') ++ rest = c :: r' -> is_hex_digitb c = false).
+    { intros c0 r' Hr. injection Hr as Hc0 Hr'. subst c0 r'. reflexivity. }
+    pose proof (parse_hex_rest_app_nonhex a2 (("013"%char :: "010"%char :: rest'') ++ rest) a2 Erest Hnonhex) as Erest'.
+    unfold parse_chunk. rewrite Econsumed_full. unfold parse_hex_size. simpl. rewrite Hhex1. simpl. rewrite <- app_assoc. rewrite Erest'. simpl. rewrite En0.
+    assert (Hlen : List.length rest'' = 0).
+    { rewrite Econsumed_full in Ejc. rewrite !app_length in Ejc. simpl in Ejc. lia. }
+    apply (proj1 (length_zero_iff_nil rest'')) in Hlen. subst rest''. reflexivity.
+  - (* data chunk *)
+    pose proof (fst (denote_map_iff ascii unit chunked_nt empty_grammar (prefix ++ (a1 :: consumed') ++ rest)
+        (unit * (list ascii * unit)) (list ascii) (fun p : unit * (list ascii * unit) => fst (snd p))
+        (Seq crlf (Seq (Exactly (hex_digits_to_nat (a1 :: a2)) octet_spec) crlf))
+        tt tt j1 (List.length (prefix ++ (a1 :: consumed'))) data) Hbody) as Hmd.
+    destruct Hmd as [pz [Ed Hseqz]].
+    pose proof (fst (denote_seq_iff ascii unit chunked_nt empty_grammar (prefix ++ (a1 :: consumed') ++ rest)
+        unit (list ascii * unit) crlf (Seq (Exactly (hex_digits_to_nat (a1 :: a2)) octet_spec) crlf)
+        tt tt j1 (List.length (prefix ++ (a1 :: consumed'))) pz) Hseqz) as Hsz.
+    destruct Hsz as [γ3 [j3 [uz [abz [[Epz Hcrlf1] Hseq2]]]]]. destruct γ3. destruct uz. subst pz.
+    pose proof (fst (denote_seq_iff ascii unit chunked_nt empty_grammar (prefix ++ (a1 :: consumed') ++ rest)
+        (list ascii) unit (Exactly (hex_digits_to_nat (a1 :: a2)) octet_spec) crlf
+        tt tt j3 (List.length (prefix ++ (a1 :: consumed'))) abz) Hseq2) as Hsz2.
+    destruct Hsz2 as [γ4 [j4 [payload [uz2 [[Epz2 Hex] Hcrlf2]]]]]. destruct γ4. destruct uz2. subst abz.
+    simpl in Ed. subst data.
+    replace (prefix ++ (a1 :: consumed') ++ rest) with ((prefix ++ (a1 :: a2)) ++ chunk_rest ++ rest) in Hcrlf1 by (rewrite Econsumed_full; rewrite !app_assoc; reflexivity).
+    replace j1 with (List.length (prefix ++ (a1 :: a2))) in Hcrlf1 by (rewrite Ej1; rewrite !app_length; simpl; lia).
+    destruct (crlf_prefix (prefix ++ (a1 :: a2)) chunk_rest rest j3 Hcrlf1) as [rest1 [Ecrlf1 Ejc1]].
+    { pose proof (denote_ge (prefix ++ (a1 :: consumed') ++ rest) (list ascii * unit)
+          (Seq (Exactly (hex_digits_to_nat (a1 :: a2)) octet_spec) crlf) tt tt j3
+          (List.length (prefix ++ (a1 :: consumed'))) (payload, tt) Hseq2) as Hge.
+      rewrite Econsumed_full in Hge. rewrite !app_length in *. simpl in *. lia. }
+    subst chunk_rest.
+    replace (prefix ++ (a1 :: consumed') ++ rest) with (((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: []) ++ rest1 ++ rest) in Hex
+      by (rewrite Econsumed_full; rewrite <- !app_assoc; simpl; reflexivity).
+    pose proof (denote_exactly_length (((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: []) ++ rest1 ++ rest) tt tt j3 j4 (hex_digits_to_nat (a1 :: a2)) payload Hex) as E4.
+    pose proof (denote_exactly_len (((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: []) ++ rest1 ++ rest) tt tt j3 j4 (hex_digits_to_nat (a1 :: a2)) payload Hex) as E4'.
+    replace j3 with (List.length ((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: [])) in Hex
+      by (rewrite Ejc1; rewrite !app_length; simpl; lia).
+    replace j4 with (List.length (((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: []) ++ payload)) in Hex
+      by (rewrite E4; rewrite <- E4'; rewrite Ejc1; rewrite !app_length; simpl; lia).
+    pose proof (denote_ge (prefix ++ (a1 :: consumed') ++ rest) unit crlf tt tt j4 (List.length (prefix ++ (a1 :: consumed'))) tt Hcrlf2) as Hge4.
+    pose proof (exactly_firstn_rest ((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: []) rest1 rest
+        (hex_digits_to_nat (a1 :: a2)) payload Hex) as Efirstn.
+    assert (Hlen_payload : List.length payload <= List.length rest1)
+      by (rewrite E4 in Hge4; rewrite <- E4' in Hge4; rewrite Econsumed_full in Hge4; rewrite !app_length in Hge4;
+          simpl in Hge4; rewrite Ejc1 in Hge4; rewrite !app_length in Hge4; simpl in Hge4; lia).
+    specialize (Efirstn Hlen_payload).
+    assert (Hrest1 : rest1 = payload ++ skipn (hex_digits_to_nat (a1 :: a2)) rest1)
+      by (symmetry in Efirstn; apply (f_equal (fun x : list ascii => x ++ skipn (hex_digits_to_nat (a1 :: a2)) rest1)) in Efirstn;
+          rewrite (firstn_skipn (hex_digits_to_nat (a1 :: a2)) rest1) in Efirstn; exact Efirstn).
+    rewrite Hrest1 in Econsumed_full.
+    replace (prefix ++ (a1 :: consumed') ++ rest)
+      with (((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: [] ++ payload)
+             ++ skipn (hex_digits_to_nat (a1 :: a2)) rest1 ++ rest) in Hcrlf2
+      by (rewrite Econsumed_full; rewrite <- !app_assoc; simpl; rewrite <- !app_assoc; reflexivity).
+    replace j4 with (List.length ((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: [] ++ payload)) in Hcrlf2
+      by (rewrite E4; rewrite <- E4'; rewrite Ejc1; rewrite !app_length; simpl; lia).
+    destruct (crlf_prefix ((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: [] ++ payload)
+        (skipn (hex_digits_to_nat (a1 :: a2)) rest1) rest (List.length (prefix ++ (a1 :: consumed'))) Hcrlf2) as [rest3 [Ecrlf2 Ejc2]].
+    { assert (Hw : ((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: [] ++ payload) ++ skipn (hex_digits_to_nat (a1 :: a2)) rest1 = prefix ++ (a1 :: consumed'))
+        by (rewrite Econsumed_full; rewrite app_assoc; simpl; rewrite <- app_assoc; reflexivity).
+      rewrite Hw. apply Nat.le_refl. }
+    assert (Hlen : List.length rest3 = 0).
+    { rewrite Econsumed_full in Ejc2; rewrite Ecrlf2 in Ejc2.
+      rewrite !app_length in Ejc2; simpl in Ejc2; rewrite !app_length in Ejc2; simpl in Ejc2; lia. }
+    apply (proj1 (length_zero_iff_nil rest3)) in Hlen. subst rest3.
+    (* rest1 = payload ++ "\r\n" ; parse_exactly n (payload ++ "\r\n" ++ rest) = Some (payload, "\r\n" ++ rest) *)
+    replace (((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: []) ++ rest1 ++ rest)
+      with (((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: []) ++ payload ++ "013"%char :: "010"%char :: rest) in Hex
+      by (rewrite Hrest1; rewrite Ecrlf2; rewrite <- !app_assoc; simpl; reflexivity).
+    pose proof (parse_exactly_complete (hex_digits_to_nat (a1 :: a2))
+        ((prefix ++ (a1 :: a2)) ++ "013"%char :: "010"%char :: []) payload ("013"%char :: "010"%char :: rest) payload Hex) as Eex.
+    assert (Hnonhex : forall c r', ("013"%char :: "010"%char :: payload ++ "013"%char :: "010"%char :: rest) = c :: r' -> is_hex_digitb c = false).
+    { intros c0 r' Hr. injection Hr as Hc0 Hr'. subst c0 r'. reflexivity. }
+    pose proof (parse_hex_rest_app_nonhex a2 ("013"%char :: "010"%char :: payload ++ "013"%char :: "010"%char :: rest) a2 Erest Hnonhex) as Erest'.
+    unfold parse_chunk. rewrite Econsumed_full. unfold parse_hex_size. simpl. rewrite Hhex1. simpl. rewrite <- app_assoc. rewrite Ecrlf2. simpl. rewrite <- app_assoc. simpl. rewrite Erest'. simpl. rewrite En0. rewrite Eex. simpl. reflexivity.
+Qed.
+
