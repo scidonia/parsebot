@@ -909,7 +909,7 @@ Proof.
       * apply d_many_nil.
     + destruct (Ascii.eqb c "."%char) eqn:Edot.
       * apply (Ascii.eqb_eq c "."%char) in Edot. subst c.
-        destruct (parse_key fuel' rest') as [[ks' rest''] |] eqn:Ek; [| discriminate].
+        destruct (parse_key fuel' rest') as [[ks' rest''] |] eqn:Ek; [| congruence].
         injection Hparse as Hk Hrest. subst ks rest.
         replace (List.length prefix + S (List.length w) - List.length rest'') with (List.length (prefix ++ ["."%char] ++ s) + S (List.length rest') - List.length rest'') by (rewrite (parse_ident_shape w s ("."%char :: rest') Eid); pos).
         apply d_many_cons with (γ' := tt) (j := List.length (prefix ++ ["."%char] ++ s)).
@@ -957,7 +957,7 @@ Proof.
       * apply d_many_nil.
     + destruct (Ascii.eqb c "."%char) eqn:Edot.
       * apply (Ascii.eqb_eq c "."%char) in Edot. subst c.
-        destruct (parse_key fuel' rest') as [[ks' rest''] |] eqn:Ek; [| discriminate].
+        destruct (parse_key fuel' rest') as [[ks' rest''] |] eqn:Ek; [| congruence].
         injection Hparse as Hk Hrest. subst k rest.
         replace (List.length prefix + List.length w - List.length rest'') with (List.length (prefix ++ s) + S (List.length rest') - List.length rest'') by (rewrite (parse_ident_shape w s ("."%char :: rest') Eid); pos).
         apply d_map with (a := (s, ks')).
@@ -1010,7 +1010,7 @@ Proof.
       exists s. symmetry. apply (parse_ident_shape w s [] Eid).
     + destruct (Ascii.eqb c "."%char) eqn:Edot.
       * apply Ascii.eqb_eq in Edot. subst c.
-        destruct (parse_key fuel' rest') as [[ks' rest''] |] eqn:Ek; [| discriminate].
+        destruct (parse_key fuel' rest') as [[ks' rest''] |] eqn:Ek; [| congruence].
         injection Hparse as Hk Hrest. subst k rest.
         destruct (IH rest' ks' rest'' Ek) as [pre Hpre].
         exists (s ++ "."%char :: pre).
@@ -1110,7 +1110,7 @@ Proof.
     destruct (Ascii.eqb c2 "["%char) eqn:Eb2.
     + (* array [[key]] *)
       apply Ascii.eqb_eq in Eb2. subst c2.
-      destruct (parse_key fuel' w'') as [[k r] |] eqn:Ek; [| discriminate].
+      destruct (parse_key fuel' w'') as [[k r] |] eqn:Ek; [| congruence].
       destruct r as [| r1 r'] eqn:Er; [discriminate |].
       destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
       apply Ascii.eqb_eq in Er1. subst r1.
@@ -1143,7 +1143,7 @@ Proof.
                       apply d_pure.
     + (* table [key] *)
       rewrite <- Ew' in *.
-      destruct (parse_key fuel' w') as [[k r] |] eqn:Ek; [| discriminate].
+      destruct (parse_key fuel' w') as [[k r] |] eqn:Ek; [| congruence].
       destruct r as [| r1 rest''] eqn:Er; [discriminate |].
       destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
       apply Ascii.eqb_eq in Er1. subst r1.
@@ -1215,7 +1215,7 @@ Proof.
     destruct (Ascii.eqb c2 "["%char) eqn:Eb2.
     + (* array [[key]] *)
       apply Ascii.eqb_eq in Eb2. subst c2.
-      destruct (parse_key fuel' w'') as [[k r] |] eqn:Ek; [| discriminate].
+      destruct (parse_key fuel' w'') as [[k r] |] eqn:Ek; [| congruence].
       destruct r as [| r1 r'] eqn:Er; [discriminate |].
       destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
       apply Ascii.eqb_eq in Er1. subst r1.
@@ -1228,7 +1228,7 @@ Proof.
       rewrite <- Hkpre. app.
     + (* table [key] *)
       rewrite <- Ew' in *.
-      destruct (parse_key fuel' w') as [[k r] |] eqn:Ek; [| discriminate].
+      destruct (parse_key fuel' w') as [[k r] |] eqn:Ek; [| congruence].
       destruct r as [| r1 rest''] eqn:Er; [discriminate |].
       destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
       apply Ascii.eqb_eq in Er1. subst r1.
@@ -1361,7 +1361,7 @@ Proof.
     destruct w' as [| c2 w''] eqn:Ew'; [discriminate |].
     destruct (Ascii.eqb c2 "["%char) eqn:Eb2.
     + apply Ascii.eqb_eq in Eb2. subst c2.
-      destruct (parse_key fuel' w'') as [[k r] |] eqn:Ek; [| discriminate].
+      destruct (parse_key fuel' w'') as [[k r] |] eqn:Ek; [| congruence].
       destruct r as [| r1 r'] eqn:Er; [discriminate |].
       destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
       apply Ascii.eqb_eq in Er1. subst r1.
@@ -1372,7 +1372,7 @@ Proof.
       destruct (parse_key_shape fuel' w'' k ("]"%char :: "]"%char :: rest') Ek) as [kpre Hkpre].
       exists ("["%char :: "["%char :: kpre ++ "]"%char :: nil). exists "]"%char.
       split; [rewrite <- Hkpre; app | apply is_ws_rb].
-    + rewrite <- Ew' in *. destruct (parse_key fuel' w') as [[k r] |] eqn:Ek; [| discriminate].
+    + rewrite <- Ew' in *. destruct (parse_key fuel' w') as [[k r] |] eqn:Ek; [| congruence].
       destruct r as [| r1 rest'] eqn:Er; [discriminate |].
       destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
       apply Ascii.eqb_eq in Er1. subst r1.
@@ -1963,7 +1963,7 @@ Proof.
     destruct rest0 as [| c rest1] eqn:Er.
     + injection Hparse as Hr. subst r. simpl. rewrite Eid. reflexivity.
     + destruct (Ascii.eqb c "."%char) eqn:Edot.
-      * destruct (parse_key fuel rest1) as [[ks rest2] |] eqn:Ek; [| discriminate].
+      * destruct (parse_key fuel rest1) as [[ks rest2] |] eqn:Ek; [| congruence].
         injection Hparse as Hr. subst r.
         simpl. rewrite Eid. rewrite Edot.
         rewrite (IH fuel'' rest1 (ks, rest2) ltac:(lia) Ek). reflexivity.
@@ -2440,7 +2440,7 @@ Proof.
     destruct rest0 as [| c rest1] eqn:Er.
     + injection Hp as Hk Hr. subst. rewrite (parse_key_S fuel' w). simpl. rewrite Eid. reflexivity.
     + destruct (Ascii.eqb c "."%char) eqn:Edot.
-      * destruct (parse_key (S fuel') rest1) as [[ks rest2] |] eqn:Ek; [| discriminate].
+      * destruct (parse_key (S fuel') rest1) as [[ks rest2] |] eqn:Ek; [| congruence].
         injection Hp as Hk Hr. subst k r.
         rewrite (parse_key_S fuel' w). simpl. rewrite Eid. rewrite Edot.
         rewrite (IH rest1 ks rest2 Ek ltac:(simpl in Hlen; lia)). reflexivity.
@@ -2658,3 +2658,64 @@ Proof.
            rewrite <- Ej5. reflexivity.
 Qed.
 Transparent skipn digits_to_nat parse_key.
+
+(* ------------------------------------------------------------------------- *)
+(* Document completeness                                                      *)
+(* ------------------------------------------------------------------------- *)
+
+Opaque parse_key.
+
+Lemma parse_stmt_mono : forall fuel fuel' w r,
+  fuel <= fuel' -> parse_stmt fuel w = Some r -> parse_stmt fuel' w = Some r.
+Proof.
+  induction fuel as [| fuel IH]; intros fuel' w r Hle Hparse.
+  - simpl in Hparse. discriminate.
+  - destruct fuel' as [| fuel'']; [lia |].
+    simpl in Hparse |- *.
+    destruct w as [| c rest] eqn:Ew; [discriminate |]. subst w.
+    destruct (Ascii.eqb c "["%char) eqn:Eb.
+    + destruct rest as [| c2 rest'] eqn:Er; [discriminate |]. subst rest.
+      destruct (Ascii.eqb c2 "["%char) eqn:Eb2.
+      * destruct (parse_key fuel rest') as [[k r0] |] eqn:Ek; [| discriminate].
+        rewrite (parse_key_mono fuel fuel'' rest' (k, r0) ltac:(lia) Ek).
+        simpl. destruct r0 as [| r1 r''] eqn:Er0; [discriminate |].
+        destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
+        destruct r'' as [| r2 r2'] eqn:Er2; [discriminate |].
+        destruct (Ascii.eqb r2 "]"%char) eqn:Er3; [| discriminate].
+        injection Hparse as Hr0. rewrite <- Hr0. reflexivity.
+      * destruct (parse_key fuel (c2 :: rest')) as [[k r0] |] eqn:Ek; [| discriminate].
+        rewrite (parse_key_mono fuel fuel'' (c2 :: rest') (k, r0) ltac:(lia) Ek).
+        simpl. destruct r0 as [| r1 r''] eqn:Er0; [discriminate |].
+        destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
+        injection Hparse as Hr0. rewrite <- Hr0. reflexivity.
+    + destruct (parse_key fuel (c :: rest)) as [[k rest1] |] eqn:Ek; [| congruence].
+      rewrite (parse_key_mono fuel fuel'' (c :: rest) (k, rest1) ltac:(lia) Ek).
+      simpl. destruct (skip_ws rest1) as [| e rest2] eqn:Esk; [discriminate |].
+      destruct (Ascii.eqb e "="%char) eqn:Eeq; [| discriminate].
+      destruct (parse_int (skip_ws rest2)) as [[v rest3] |] eqn:Ei; [| discriminate].
+      injection Hparse as Hr0. rewrite <- Hr0. reflexivity.
+Qed.
+
+Lemma parse_doc_mono : forall fuel fuel' w d,
+  fuel <= fuel' -> parse_doc fuel w = Some d -> parse_doc fuel' w = Some d.
+Proof.
+  induction fuel as [| fuel IH]; intros fuel' w d Hle Hparse.
+  - destruct fuel' as [| fuel'']; [exact Hparse |].
+    rewrite parse_doc_O in Hparse.
+    destruct (skip_ws w) as [| c w'] eqn:Ew; [| congruence].
+    injection Hparse as Hd. subst d.
+    rewrite parse_doc_S. rewrite Ew. simpl. reflexivity.
+  - destruct fuel' as [| fuel'']; [lia |].
+    rewrite parse_doc_S in *. destruct (skip_ws w) as [| a l] eqn:Ew.
+    + simpl in *. injection Hparse as Hd. subst d. reflexivity.
+    + destruct (parse_stmt fuel (a :: l)) as [[s rest] |] eqn:Es; [| congruence].
+      rewrite (parse_stmt_mono fuel fuel'' (a :: l) (s, rest) ltac:(lia) Es).
+      destruct (skip_ws rest) as [| b l'] eqn:Er.
+      * simpl in *. injection Hparse as Hd. subst d. reflexivity.
+      * destruct rest as [| c2 rest0] eqn:Erest; [congruence |]. subst rest.
+        destruct (is_ws c2) eqn:Ews; [| congruence].
+        destruct (parse_doc fuel (c2 :: rest0)) as [d' |] eqn:Ed; [| congruence].
+        simpl in *. injection Hparse as Hd. subst d.
+        rewrite (IH fuel'' (c2 :: rest0) d' ltac:(lia) Ed). reflexivity.
+Qed.
+
