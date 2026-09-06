@@ -413,10 +413,11 @@ Definition array_spec : Spec ascii unit tom_nt stmt :=
 Definition stmt_spec : Spec ascii unit tom_nt stmt :=
   Alt kv_spec (Alt table_spec array_spec).
 
-(* a document: (ws stmt)* ws *)
+(* a document: leading ws, then (stmt ws)* — each statement is followed by ws,
+   so the trailing ws is consumed too. *)
 Definition doc_spec : Spec ascii unit tom_nt Document :=
   Bind ws_spec (fun _ =>
-    Many (Bind ws_spec (fun _ => stmt_spec))).
+    Many (Bind stmt_spec (fun s => Bind ws_spec (fun _ => Pure s)))).
 
 (* ------------------------------------------------------------------------- *)
 (* The surface parser (fuel-bounded)                                          *)
@@ -1087,4 +1088,127 @@ Proof.
                apply (parse_int_sound (prefix ++ kpre ++ ws_part rest1 ++ ["="%char] ++ ws_part rest2) (skip_ws rest2) v rest3 Hi).
 Qed.
 
+
+
+(* ------------------------------------------------------------------------- *)
+(* Documents                                                                  *)
+(* ------------------------------------------------------------------------- *)
+
+Lemma parse_stmt_shape : forall fuel w s rest,
+  parse_stmt fuel w = Some (s, rest) -> { pre : list ascii & pre ++ rest = w }.
+Proof.
+  intros fuel w s rest Hparse. unfold parse_stmt in Hparse.
+  destruct fuel as [| fuel']; [discriminate |].
+  destruct w as [| c w'] eqn:Ew; [discriminate |].
+  destruct (Ascii.eqb c "["%char) eqn:Eb.
+  - apply Ascii.eqb_eq in Eb. subst c.
+    destruct w' as [| c2 w''] eqn:Ew'; [discriminate |].
+    destruct (Ascii.eqb c2 "["%char) eqn:Eb2.
+    + (* array [[key]] *)
+      apply Ascii.eqb_eq in Eb2. subst c2.
+      destruct (parse_key fuel' w'') as [[k r] |] eqn:Ek; [| discriminate].
+      destruct r as [| r1 r'] eqn:Er; [discriminate |].
+      destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
+      apply Ascii.eqb_eq in Er1. subst r1.
+      destruct r' as [| r2 rest''] eqn:Er'; [discriminate |].
+      destruct (Ascii.eqb r2 "]"%char) eqn:Er2; [| discriminate].
+      apply Ascii.eqb_eq in Er2. subst r2.
+      injection Hparse as Hs Hrest. subst s rest.
+      destruct (parse_key_shape fuel' w'' k ("]"%char :: "]"%char :: rest'') Ek) as [kpre Hkpre].
+      exists ("["%char :: "["%char :: kpre ++ "]"%char :: "]"%char :: nil).
+      rewrite <- Hkpre. app.
+    + (* table [key] *)
+      rewrite <- Ew' in *.
+      destruct (parse_key fuel' w') as [[k r] |] eqn:Ek; [| discriminate].
+      destruct r as [| r1 rest''] eqn:Er; [discriminate |].
+      destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
+      apply Ascii.eqb_eq in Er1. subst r1.
+      injection Hparse as Hs Hrest. subst s rest.
+      destruct (parse_key_shape fuel' w' k ("]"%char :: rest'') Ek) as [kpre Hkpre].
+      exists ("["%char :: kpre ++ "]"%char :: nil).
+      rewrite <- Hkpre. app.
+  - (* kv key = value *)
+    rewrite <- Ew in *.
+    destruct (parse_key fuel' w) as [[k rest1] |] eqn:Hk; [| discriminate].
+    destruct (skip_ws rest1) as [| e rest2] eqn:Eskip; [discriminate |].
+    destruct (Ascii.eqb e "="%char) eqn:Eeq; [| discriminate].
+    apply Ascii.eqb_eq in Eeq. subst e.
+    destruct (parse_int (skip_ws rest2)) as [[v rest3] |] eqn:Hi; [| discriminate].
+    injection Hparse as Hs Hrest. subst s rest.
+    destruct (parse_key_shape fuel' w k rest1 Hk) as [kpre Hkpre].
+    destruct (parse_int_shape (skip_ws rest2) v rest3 Hi) as [ipre Hipre].
+    exists (kpre ++ ws_part rest1 ++ "="%char :: ws_part rest2 ++ ipre).
+    rewrite <- Hkpre. rewrite <- (ws_part_skip rest1) at 2. rewrite Eskip. rewrite <- (ws_part_skip rest2) at 2. app. rewrite Hipre. reflexivity.
+Qed.
+
+Lemma doc_mid_len (prefix spre rest' w' : list ascii) :
+  spre ++ rest' = w' ->
+  List.length prefix + List.length w' - List.length rest' + List.length (ws_part rest') = List.length (prefix ++ spre ++ ws_part rest').
+Proof.
+  intros H. rewrite <- H. rewrite !length_app. simpl. lia.
+Qed.
+
+Lemma doc_tail_len (prefix spre rest' w : list ascii) :
+  spre ++ ws_part rest' ++ skip_ws rest' = w ->
+  List.length prefix + List.length w = List.length (prefix ++ spre ++ ws_part rest') + List.length (skip_ws rest').
+Proof.
+  intros H. rewrite <- H. rewrite !length_app. simpl. lia.
+Qed.
+
+Lemma parse_doc_many_sound : forall fuel prefix w ss,
+  parse_doc fuel w = Some ss ->
+  denote surface_grammar (prefix ++ skip_ws w)
+    (Many (Bind stmt_spec (fun s => Bind ws_spec (fun _ => Pure s))))
+    tt (List.length prefix) ss tt (List.length prefix + List.length (skip_ws w)).
+Proof.
+  induction fuel as [| fuel' IH]; intros prefix w ss Hparse.
+  - simpl in Hparse.
+    destruct (skip_ws w) as [| c w']; [| discriminate].
+    injection Hparse as Hss. subst ss. replace (List.length prefix + List.length (@nil ascii)) with (List.length prefix) by (simpl; lia). apply d_many_nil.
+  - simpl in Hparse.
+    destruct (skip_ws w) as [| c w'] eqn:Ew.
+    + injection Hparse as Hss. subst ss. replace (List.length prefix + List.length (@nil ascii)) with (List.length prefix) by (simpl; lia). apply d_many_nil.
+    + destruct (parse_stmt fuel' (c :: w')) as [[s rest'] |] eqn:Es; [| discriminate].
+      destruct (parse_doc fuel' rest') as [ss' |] eqn:Ed; [| discriminate].
+      injection Hparse as Hss. subst ss.
+      destruct (parse_stmt_shape fuel' (c :: w') s rest' Es) as [spre Hspre].
+      apply d_many_cons with (γ' := tt) (j := List.length prefix + List.length (c :: w') - List.length rest' + List.length (ws_part rest')).
+      * apply d_bind with (a := s) (γ' := tt) (j := List.length prefix + List.length (c :: w') - List.length rest').
+        -- apply (parse_stmt_sound fuel' prefix (c :: w') s rest' Es).
+        -- apply d_bind with (a := tt) (γ' := tt) (j := List.length prefix + List.length (c :: w') - List.length rest' + List.length (ws_part rest')).
+           ++ replace (List.length prefix + List.length (c :: w') - List.length rest' + List.length (ws_part rest')) with (List.length (prefix ++ (c :: w')) - List.length rest' + List.length (ws_part rest')) by pos.
+              replace (List.length prefix + List.length (c :: w') - List.length rest') with (List.length (prefix ++ (c :: w')) - List.length rest') by pos.
+              apply (skip_ws_mid_sound (prefix ++ (c :: w')) rest').
+              exists (prefix ++ spre). rewrite <- app_assoc. rewrite Hspre. reflexivity.
+           ++ apply d_pure.
+      * rewrite <- Ew in *.
+        replace (prefix ++ skip_ws w) with ((prefix ++ spre ++ ws_part rest') ++ skip_ws rest')
+          by (rewrite <- Hspre; rewrite <- (ws_part_skip rest') at 3; app).
+        replace (List.length prefix + List.length (skip_ws w) - List.length rest' + List.length (ws_part rest')) with (List.length (prefix ++ spre ++ ws_part rest')) by (symmetry; apply (doc_mid_len prefix spre rest' (skip_ws w) Hspre)).
+        assert (Htail : spre ++ ws_part rest' ++ skip_ws rest' = skip_ws w) by (rewrite <- Hspre; rewrite <- (ws_part_skip rest') at 3; app).
+        replace (List.length prefix + List.length (skip_ws w)) with (List.length (prefix ++ spre ++ ws_part rest') + List.length (skip_ws rest')) by (symmetry; apply (doc_tail_len prefix spre rest' (skip_ws w) Htail)).
+        apply (IH (prefix ++ spre ++ ws_part rest') rest' ss' Ed).
+Qed.
+
+Lemma ws_direct_sound (w : list ascii) :
+  denote surface_grammar w ws_spec tt 0 tt tt (List.length (ws_part w)).
+Proof.
+  replace 0 with (List.length w - List.length w) by (apply Nat.sub_diag).
+  replace (List.length (ws_part w)) with (List.length w - List.length w + List.length (ws_part w)) by (rewrite Nat.sub_diag; apply Nat.add_0_l).
+  apply (skip_ws_mid_sound w w).
+  exists []. reflexivity.
+Qed.
+
+Lemma parse_doc_sound : forall fuel w doc,
+  parse_doc fuel w = Some doc ->
+  denote surface_grammar w doc_spec tt 0 doc tt (List.length w).
+Proof.
+  intros fuel w doc Hparse. unfold doc_spec.
+  apply d_bind with (a := tt) (γ' := tt) (j := List.length (ws_part w)).
+  - apply ws_direct_sound.
+  - replace (List.length w) with (List.length (ws_part w) + List.length (skip_ws w)) by (symmetry; apply (length_ws_part_skip w)).
+    apply (eq_rect (ws_part w ++ skip_ws w)
+             (fun x : list ascii => denote surface_grammar x (Many (Bind stmt_spec (fun s => Bind ws_spec (fun _ => Pure s)))) tt (List.length (ws_part w)) doc tt (List.length (ws_part w) + List.length (skip_ws w)))
+             (parse_doc_many_sound fuel (ws_part w) w doc Hparse) w (ws_part_skip w)).
+Qed.
 
