@@ -485,32 +485,51 @@ Definition parse_stmt (fuel : nat) (w : list ascii) : option (stmt * list ascii)
   | S fuel', c :: rest =>
       if Ascii.eqb c "["%char then
         match rest with
-        | "["%char :: rest' =>
-            match parse_key fuel' rest' with
-            | Some (k, "]"%char :: "]"%char :: rest'') => Some (SArray k, rest'')
-            | _ => None
-            end
-        | _ =>
-            match parse_key fuel' rest with
-            | Some (k, "]"%char :: rest'') => Some (STable k, rest'')
-            | _ => None
-            end
+        | c2 :: rest' =>
+            if Ascii.eqb c2 "["%char then
+              match parse_key fuel' rest' with
+              | Some (k, r) =>
+                  match r with
+                  | r1 :: r' =>
+                      if Ascii.eqb r1 "]"%char then
+                        match r' with
+                        | r2 :: r'' => if Ascii.eqb r2 "]"%char then Some (SArray k, r'') else None
+                        | [] => None
+                        end
+                      else None
+                  | [] => None
+                  end
+              | None => None
+              end
+            else
+              match parse_key fuel' rest with
+              | Some (k, r) =>
+                  match r with
+                  | r1 :: r'' => if Ascii.eqb r1 "]"%char then Some (STable k, r'') else None
+                  | [] => None
+                  end
+              | None => None
+              end
+        | [] => None
         end
       else
         match parse_key fuel' w with
-        | Some (k, rest) =>
-            match skip_ws rest with
-            | "="%char :: rest' =>
-                match parse_int (skip_ws rest') with
-                | Some (v, rest'') => Some (SKV k v, rest'')
-                | None => None
-                end
-            | _ => None
+        | Some (k, rest1) =>
+            match skip_ws rest1 with
+            | e :: rest2 =>
+                if Ascii.eqb e "="%char then
+                  match parse_int (skip_ws rest2) with
+                  | Some (v, rest3) => Some (SKV k v, rest3)
+                  | None => None
+                  end
+                else None
+            | [] => None
             end
-        | _ => None
+        | None => None
         end
   end.
 
+(* parse-then-validate: surface-parse, then run the state machine *)
 Fixpoint parse_doc (fuel : nat) (w : list ascii) : option Document :=
   let w' := skip_ws w in
   match w' with
@@ -530,7 +549,6 @@ Fixpoint parse_doc (fuel : nat) (w : list ascii) : option Document :=
       end
   end.
 
-(* parse-then-validate: surface-parse, then run the state machine *)
 Definition parse_then_validate (w : list ascii) : option Namespace :=
   match parse_doc (S (2 * List.length w)) w with
   | None => None
@@ -754,7 +772,7 @@ Qed.
 
 (* The dotted-tail of a key: `parse_key fuel w` reading `ks` corresponds to
    `Many (· "." ident)` reading `.w`, consuming the leading dot each round. *)
-Ltac pos := repeat rewrite length_app; simpl; lia.
+Ltac pos := repeat (rewrite length_app; simpl); simpl; lia.
 
 Lemma parse_key_many_sound : forall fuel prefix w ks rest,
   parse_key fuel w = Some (ks, rest) ->
@@ -847,4 +865,226 @@ Proof.
            apply (parse_ident_sound prefix w s (c :: rest') Eid).
         -- apply d_many_nil.
 Qed.
+
+
+(* ------------------------------------------------------------------------- *)
+(* Statements                                                                 *)
+(* ------------------------------------------------------------------------- *)
+
+Lemma skip_ws_rest_len (w : list ascii) (c : ascii) (rest : list ascii) :
+  skip_ws w = c :: rest -> List.length w = List.length (ws_part w) + S (List.length rest).
+Proof.
+  intros H. rewrite <- (ws_part_skip w) at 1. rewrite H. simpl. rewrite length_app. simpl. lia.
+Qed.
+
+Lemma parse_int_shape (w : list ascii) (n : nat) (rest : list ascii) :
+  parse_int w = Some (n, rest) -> { pre : list ascii & pre ++ rest = w }.
+Proof.
+  intros H. unfold parse_int in H.
+  destruct w as [| c w']; [discriminate |].
+  destruct (is_digit c) eqn:Ed; [| discriminate].
+  destruct (take_digits w') as [ds rest'] eqn:Eds.
+  injection H as Hn Hrest. subst n rest.
+  exists (c :: ds). simpl. f_equal. symmetry. apply (take_digits_shape w' ds rest' Eds).
+Qed.
+
+Lemma parse_key_shape : forall fuel w k rest,
+  parse_key fuel w = Some (k, rest) -> { pre : list ascii & pre ++ rest = w }.
+Proof.
+  induction fuel as [| fuel' IH]; intros w k rest Hparse.
+  - simpl in Hparse. discriminate.
+  - simpl in Hparse.
+    destruct (parse_ident w) as [[s rest0] |] eqn:Eid; [| discriminate].
+    destruct rest0 as [| c rest'] eqn:Er.
+    + injection Hparse as Hk Hrest. subst k rest.
+      exists s. symmetry. apply (parse_ident_shape w s [] Eid).
+    + destruct (Ascii.eqb c "."%char) eqn:Edot.
+      * apply Ascii.eqb_eq in Edot. subst c.
+        destruct (parse_key fuel' rest') as [[ks' rest''] |] eqn:Ek; [| discriminate].
+        injection Hparse as Hk Hrest. subst k rest.
+        destruct (IH rest' ks' rest'' Ek) as [pre Hpre].
+        exists (s ++ "."%char :: pre).
+        rewrite (parse_ident_shape w s ("."%char :: rest') Eid). rewrite <- app_assoc. simpl. rewrite Hpre. reflexivity.
+      * injection Hparse as Hk Hrest. subst k rest.
+        exists s. symmetry. apply (parse_ident_shape w s (c :: rest') Eid).
+Qed.
+
+Lemma app_len_sub (kpre rest w : list ascii) :
+  kpre ++ rest = w -> List.length w - List.length rest = List.length kpre.
+Proof.
+  intros H. rewrite <- H. rewrite length_app. lia.
+Qed.
+
+Lemma kv_ws_pos (prefix kpre rest1 w rest2 : list ascii) :
+  kpre ++ rest1 = w -> skip_ws rest1 = "="%char :: rest2 ->
+  List.length prefix + List.length w - List.length rest1 + List.length (ws_part rest1)
+  = List.length prefix + List.length w - List.length ("="%char :: rest2).
+Proof.
+  intros Hk Hskip.
+  assert (Hr : rest1 = ws_part rest1 ++ "="%char :: rest2).
+  { symmetry. rewrite <- Hskip. apply (ws_part_skip rest1). }
+  assert (H1 : List.length prefix + List.length w - List.length rest1 = List.length prefix + List.length kpre).
+  { rewrite <- Hk. rewrite !length_app. lia. }
+  assert (H2 : List.length prefix + List.length w - List.length ("="%char :: rest2) = List.length prefix + List.length kpre + List.length (ws_part rest1)).
+  { rewrite <- Hk. rewrite Hr at 1. rewrite !length_app. simpl. lia. }
+  rewrite H1. rewrite H2. lia.
+Qed.
+
+Ltac app := simpl; repeat (rewrite <- app_assoc; simpl); try reflexivity.
+
+Lemma kv_input_eq (prefix kpre rest1 w rest2 : list ascii) :
+  kpre ++ rest1 = w -> skip_ws rest1 = "="%char :: rest2 ->
+  prefix ++ w = (prefix ++ kpre ++ ws_part rest1) ++ "="%char :: rest2.
+Proof.
+  intros Hk Hs. rewrite <- Hk. rewrite <- (ws_part_skip rest1) at 1. rewrite Hs. app.
+Qed.
+
+Lemma kv_mid_eq (prefix kpre rest1 w rest2 : list ascii) :
+  kpre ++ rest1 = w -> skip_ws rest1 = "="%char :: rest2 ->
+  (prefix ++ kpre ++ ws_part rest1 ++ ["="%char]) ++ rest2 = prefix ++ w.
+Proof.
+  intros Hk Hs. rewrite <- Hk. rewrite <- (ws_part_skip rest1) at 2. rewrite Hs. app.
+Qed.
+
+
+Lemma kv_eq_pos (prefix kpre rest1 w rest2 : list ascii) :
+  kpre ++ rest1 = w -> skip_ws rest1 = "="%char :: rest2 ->
+  List.length prefix + List.length w - List.length rest2 = S (List.length (prefix ++ kpre ++ ws_part rest1)).
+Proof.
+  intros Hk Hs. rewrite <- Hk. rewrite <- (ws_part_skip rest1) at 1. rewrite Hs. rewrite !length_app. simpl. lia.
+Qed.
+
+Lemma kv_eq_len (prefix kpre rest1 w rest2 : list ascii) :
+  kpre ++ rest1 = w -> skip_ws rest1 = "="%char :: rest2 ->
+  List.length prefix + List.length w - List.length ("="%char :: rest2) = List.length (prefix ++ kpre ++ ws_part rest1).
+Proof.
+  intros Hk Hs. rewrite <- Hk. rewrite <- (ws_part_skip rest1) at 1. rewrite Hs. rewrite !length_app. simpl. lia.
+Qed.
+
+Lemma kv_int_len (prefix kpre rest1 w rest2 : list ascii) :
+  kpre ++ rest1 = w -> skip_ws rest1 = "="%char :: rest2 ->
+  List.length prefix + List.length w - List.length rest2 + List.length (ws_part rest2) = List.length (prefix ++ kpre ++ ws_part rest1 ++ ["="%char] ++ ws_part rest2).
+Proof.
+  intros Hk Hs. rewrite <- Hk. rewrite <- (ws_part_skip rest1) at 1. rewrite Hs. rewrite !length_app. simpl. lia.
+Qed.
+
+Lemma kv_int_len2 (prefix kpre rest1 w rest2 : list ascii) :
+  kpre ++ rest1 = w -> skip_ws rest1 = "="%char :: rest2 ->
+  List.length prefix + List.length w = List.length (prefix ++ kpre ++ ws_part rest1 ++ ["="%char] ++ ws_part rest2) + List.length (skip_ws rest2).
+Proof.
+  intros Hk Hs. rewrite <- Hk. rewrite <- (ws_part_skip rest1) at 1. rewrite Hs. rewrite <- (ws_part_skip rest2) at 1. repeat (rewrite length_app; simpl). lia.
+Qed.
+
+Lemma kv_int_eq (prefix kpre rest1 w rest2 : list ascii) :
+  kpre ++ rest1 = w -> skip_ws rest1 = "="%char :: rest2 ->
+  prefix ++ w = (prefix ++ kpre ++ ws_part rest1 ++ ["="%char] ++ ws_part rest2) ++ skip_ws rest2.
+Proof.
+  intros Hk Hs. rewrite <- Hk. rewrite <- (ws_part_skip rest1) at 1. rewrite Hs. rewrite <- (ws_part_skip rest2) at 1. app.
+Qed.
+
+
+
+Lemma parse_stmt_sound (fuel : nat) (prefix w : list ascii) (s : stmt) (rest : list ascii) :
+  parse_stmt fuel w = Some (s, rest) ->
+  denote surface_grammar (prefix ++ w) stmt_spec tt (List.length prefix) s
+    tt (List.length prefix + List.length w - List.length rest).
+Proof.
+  unfold parse_stmt, stmt_spec in *.
+  intros Hparse.
+  destruct fuel as [| fuel']; [discriminate |].
+  destruct w as [| c w'] eqn:Ew; [discriminate |].
+  destruct (Ascii.eqb c "["%char) eqn:Eb.
+  - (* bracket: table or array *)
+    apply Ascii.eqb_eq in Eb. subst c.
+    destruct w' as [| c2 w''] eqn:Ew'; [discriminate |].
+    destruct (Ascii.eqb c2 "["%char) eqn:Eb2.
+    + (* array [[key]] *)
+      apply Ascii.eqb_eq in Eb2. subst c2.
+      destruct (parse_key fuel' w'') as [[k r] |] eqn:Ek; [| discriminate].
+      destruct r as [| r1 r'] eqn:Er; [discriminate |].
+      destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
+      apply Ascii.eqb_eq in Er1. subst r1.
+      destruct r' as [| r2 rest''] eqn:Er'; [discriminate |].
+      destruct (Ascii.eqb r2 "]"%char) eqn:Er2; [| discriminate].
+      apply Ascii.eqb_eq in Er2. subst r2.
+      injection Hparse as Hs Hrest. subst s rest.
+      destruct (parse_key_shape fuel' w'' k ("]"%char :: "]"%char :: rest'') Ek) as [kpre Hkpre].
+      apply d_alt_r. apply d_alt_r.
+      apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix)).
+      -- apply (ch_sound "["%char prefix ("["%char :: w'')).
+      -- apply d_bind with (a := tt) (γ' := tt) (j := S (S (List.length prefix))).
+         ++ replace (prefix ++ "["%char :: "["%char :: w'') with ((prefix ++ ["["%char]) ++ "["%char :: w'') by app.
+             replace (S (List.length prefix)) with (List.length (prefix ++ ["["%char])) by pos.
+             replace (S (S (List.length prefix))) with (S (List.length (prefix ++ ["["%char]))) by pos.
+             apply (ch_sound "["%char (prefix ++ ["["%char]) w'').
+         ++ apply d_bind with (a := k) (γ' := tt) (j := List.length (prefix ++ ["["%char; "["%char]) + List.length w'' - List.length ("]"%char :: "]"%char :: rest'')).
+            ** replace (prefix ++ "["%char :: "["%char :: w'') with ((prefix ++ ["["%char; "["%char]) ++ w'') by app.
+               replace (S (S (List.length prefix))) with (List.length (prefix ++ ["["%char; "["%char])) by pos.
+               apply (parse_key_sound fuel' (prefix ++ ["["%char; "["%char]) w'' k ("]"%char :: "]"%char :: rest'') Ek).
+            ** apply d_bind with (a := tt) (γ' := tt) (j := S (List.length (prefix ++ "["%char :: "["%char :: kpre))).
+               -- replace (prefix ++ "["%char :: "["%char :: w'') with ((prefix ++ "["%char :: "["%char :: kpre) ++ "]"%char :: "]"%char :: rest'') by (rewrite <- Hkpre; app).
+                  replace (List.length (prefix ++ ["["%char; "["%char]) + List.length w'' - List.length ("]"%char :: "]"%char :: rest'')) with (List.length (prefix ++ "["%char :: "["%char :: kpre)) by (rewrite <- Hkpre; pos).
+                  apply (ch_sound "]"%char (prefix ++ "["%char :: "["%char :: kpre) ("]"%char :: rest'')).
+               -- apply d_bind with (a := tt) (γ' := tt) (j := S (List.length (prefix ++ "["%char :: "["%char :: kpre ++ ["]"%char]))).
+                  ++ replace (prefix ++ "["%char :: "["%char :: w'') with ((prefix ++ "["%char :: "["%char :: kpre ++ ["]"%char]) ++ "]"%char :: rest'') by (rewrite <- Hkpre; app).
+                     replace (S (List.length (prefix ++ "["%char :: "["%char :: kpre))) with (List.length (prefix ++ "["%char :: "["%char :: kpre ++ ["]"%char])) by pos.
+                     apply (ch_sound "]"%char (prefix ++ "["%char :: "["%char :: kpre ++ ["]"%char]) rest'').
+                  ++ replace (List.length prefix + List.length ("["%char :: "["%char :: w'') - List.length rest'') with (S (List.length (prefix ++ "["%char :: "["%char :: kpre ++ ["]"%char]))) by (rewrite <- Hkpre; pos).
+                      apply d_pure.
+    + (* table [key] *)
+      rewrite <- Ew' in *.
+      destruct (parse_key fuel' w') as [[k r] |] eqn:Ek; [| discriminate].
+      destruct r as [| r1 rest''] eqn:Er; [discriminate |].
+      destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
+      apply Ascii.eqb_eq in Er1. subst r1.
+      injection Hparse as Hs Hrest. subst s rest.
+      destruct (parse_key_shape fuel' w' k ("]"%char :: rest'') Ek) as [kpre Hkpre].
+      apply d_alt_r. apply d_alt_l.
+      apply d_bind with (a := tt) (γ' := tt) (j := S (List.length prefix)).
+      -- apply (ch_sound "["%char prefix w').
+      -- apply d_bind with (a := k) (γ' := tt) (j := List.length (prefix ++ ["["%char]) + List.length w' - List.length ("]"%char :: rest'')).
+         ++ replace (prefix ++ "["%char :: w') with ((prefix ++ ["["%char]) ++ w') by app.
+             replace (S (List.length prefix)) with (List.length (prefix ++ ["["%char])) by pos.
+             apply (parse_key_sound fuel' (prefix ++ ["["%char]) w' k ("]"%char :: rest'') Ek).
+         ++ apply d_bind with (a := tt) (γ' := tt) (j := S (List.length (prefix ++ "["%char :: kpre))).
+            ** replace (prefix ++ "["%char :: w') with ((prefix ++ "["%char :: kpre) ++ "]"%char :: rest'') by (rewrite <- Hkpre; app).
+               replace (List.length (prefix ++ ["["%char]) + List.length w' - List.length ("]"%char :: rest'')) with (List.length (prefix ++ "["%char :: kpre)) by (rewrite <- Hkpre; pos).
+               apply (ch_sound "]"%char (prefix ++ "["%char :: kpre) rest'').
+            ** replace (List.length prefix + List.length ("["%char :: w') - List.length rest'') with (S (List.length (prefix ++ "["%char :: kpre))) by (rewrite <- Hkpre; pos).
+               apply d_pure.
+  - (* kv key = value *)
+    rewrite <- Ew in *.
+    destruct (parse_key fuel' w) as [[k rest1] |] eqn:Hk; [| discriminate].
+    destruct (skip_ws rest1) as [| e rest2] eqn:Eskip; [discriminate |].
+    destruct (Ascii.eqb e "="%char) eqn:Eeq; [| discriminate].
+    apply Ascii.eqb_eq in Eeq. subst e.
+    destruct (parse_int (skip_ws rest2)) as [[v rest3] |] eqn:Hi; [| discriminate].
+    injection Hparse as Hs Hrest. subst s rest.
+    destruct (parse_key_shape fuel' w k rest1 Hk) as [kpre Hkpre].
+    apply d_alt_l.
+    apply d_bind with (a := k) (γ' := tt) (j := List.length prefix + List.length w - List.length rest1).
+    * apply (parse_key_sound fuel' prefix w k rest1 Hk).
+    * apply d_bind with (a := tt) (γ' := tt) (j := List.length prefix + List.length w - List.length rest1 + List.length (ws_part rest1)).
+      -- replace (List.length prefix + List.length w - List.length rest1) with (List.length (prefix ++ w) - List.length rest1) by pos.
+         apply (skip_ws_mid_sound (prefix ++ w) rest1).
+         exists (prefix ++ kpre). rewrite <- app_assoc. rewrite Hkpre. reflexivity.
+      -- replace (List.length prefix + List.length w - List.length rest1 + List.length (ws_part rest1)) with (List.length prefix + List.length w - List.length ("="%char :: rest2)) by (symmetry; apply (kv_ws_pos prefix kpre rest1 w rest2 Hkpre Eskip)).
+         apply d_bind with (a := tt) (γ' := tt) (j := List.length prefix + List.length w - List.length rest2).
+         ++ replace (prefix ++ w) with ((prefix ++ kpre ++ ws_part rest1) ++ "="%char :: rest2) by (symmetry; apply (kv_input_eq prefix kpre rest1 w rest2 Hkpre Eskip)).
+            replace (List.length prefix + List.length w - List.length ("="%char :: rest2)) with (List.length (prefix ++ kpre ++ ws_part rest1)) by (symmetry; apply (kv_eq_len prefix kpre rest1 w rest2 Hkpre Eskip)).
+            replace (List.length prefix + List.length w - List.length rest2) with (S (List.length (prefix ++ kpre ++ ws_part rest1))) by (symmetry; apply (kv_eq_pos prefix kpre rest1 w rest2 Hkpre Eskip)).
+            apply (ch_sound "="%char (prefix ++ kpre ++ ws_part rest1) rest2).
+         ++ apply d_bind with (a := tt) (γ' := tt) (j := List.length prefix + List.length w - List.length rest2 + List.length (ws_part rest2)).
+            ** replace (List.length prefix + List.length w - List.length rest2) with (List.length (prefix ++ w) - List.length rest2) by pos.
+               apply (skip_ws_mid_sound (prefix ++ w) rest2).
+               exists (prefix ++ kpre ++ ws_part rest1 ++ ["="%char]).
+               apply (kv_mid_eq prefix kpre rest1 w rest2 Hkpre Eskip).
+            ** replace (List.length prefix + List.length w - List.length rest2 + List.length (ws_part rest2)) with (List.length (prefix ++ kpre ++ ws_part rest1 ++ ["="%char] ++ ws_part rest2)) by (symmetry; apply (kv_int_len prefix kpre rest1 w rest2 Hkpre Eskip)).
+               apply d_map with (a := v).
+               (* int_spec from skip_ws rest2 *)
+               replace (prefix ++ w) with ((prefix ++ kpre ++ ws_part rest1 ++ ["="%char] ++ ws_part rest2) ++ skip_ws rest2) by (symmetry; apply (kv_int_eq prefix kpre rest1 w rest2 Hkpre Eskip)).
+               replace (List.length prefix + List.length w - List.length rest3) with (List.length (prefix ++ kpre ++ ws_part rest1 ++ ["="%char] ++ ws_part rest2) + List.length (skip_ws rest2) - List.length rest3) by (rewrite (kv_int_len2 prefix kpre rest1 w rest2 Hkpre Eskip); reflexivity).
+               apply (parse_int_sound (prefix ++ kpre ++ ws_part rest1 ++ ["="%char] ++ ws_part rest2) (skip_ws rest2) v rest3 Hi).
+Qed.
+
 
