@@ -354,6 +354,12 @@ Definition ws_spec : Spec ascii unit tom_nt unit :=
   Map (fun _ : list unit => tt)
       (Many (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true)))).
 
+(* one or more whitespace characters (the statement separator) *)
+Definition ws1_spec : Spec ascii unit tom_nt unit :=
+  Map (fun _ : unit * list unit => tt)
+      (Seq (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true)))
+           (Many (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true))))).
+
 Definition digit_spec : Spec ascii unit tom_nt ascii := Tok (fun c => is_digit c = true).
 
 Fixpoint digits_to_nat (ds : list ascii) (acc : nat) : nat :=
@@ -413,11 +419,14 @@ Definition array_spec : Spec ascii unit tom_nt stmt :=
 Definition stmt_spec : Spec ascii unit tom_nt stmt :=
   Alt kv_spec (Alt table_spec array_spec).
 
-(* a document: leading ws, then (stmt ws)* — each statement is followed by ws,
-   so the trailing ws is consumed too. *)
+(* a document: leading ws, stmt (ws stmt)*, trailing ws — statements are
+   separated by one-or-more whitespace characters. *)
 Definition doc_spec : Spec ascii unit tom_nt Document :=
   Bind ws_spec (fun _ =>
-    Many (Bind stmt_spec (fun s => Bind ws_spec (fun _ => Pure s)))).
+    Bind (Alt (Pure ([] : Document))
+              (Map (fun p : stmt * list stmt => fst p :: snd p)
+                 (Seq stmt_spec (Many (Bind ws1_spec (fun _ => stmt_spec))))))
+         (fun doc => Bind ws_spec (fun _ => Pure doc))).
 
 (* ------------------------------------------------------------------------- *)
 (* The surface parser (fuel-bounded)                                          *)
@@ -541,9 +550,18 @@ Fixpoint parse_doc (fuel : nat) (w : list ascii) : option Document :=
           match parse_stmt fuel' (skip_ws w) with
           | None => None
           | Some (s, rest) =>
-              match parse_doc fuel' rest with
-              | None => None
-              | Some ss => Some (s :: ss)
+              match skip_ws rest with
+              | [] => Some [s]
+              | _ =>
+                  match rest with
+                  | [] => None
+                  | c :: _ => if is_ws c
+                      then match parse_doc fuel' rest with
+                           | None => None
+                           | Some ss => Some (s :: ss)
+                           end
+                      else None
+                  end
               end
           end
       end
@@ -603,9 +621,101 @@ Proof.
     + reflexivity.
 Qed.
 
+(* every character of ws_part w is whitespace *)
+Lemma ws_part_all_ws_char : forall w c, In c (ws_part w) -> is_ws c = true.
+Proof.
+  induction w as [| c' w' IH]; simpl; intros c Hin.
+  - destruct Hin.
+  - remember (is_ws c') as b. destruct b.
+    + simpl in Hin. destruct Hin as [Hc | Hin']; [subst; symmetry; exact Heqb | exact (IH c Hin')].
+    + destruct Hin.
+Qed.
+
+(* ws_part of an all-ws list is the whole list *)
+Lemma ws_part_all_ws : forall l, (forall c, In c l -> is_ws c = true) -> ws_part l = l.
+Proof.
+  induction l as [| c l' IH]; intros H.
+  - reflexivity.
+  - simpl. rewrite (H c (in_eq c l')). rewrite IH.
+    + reflexivity.
+    + intros c0 Hin. apply (H c0 (in_cons c c0 l' Hin)).
+Qed.
+
+Lemma ws_part_app_all : forall l m, ws_part l = l -> ws_part (l ++ m) = l ++ ws_part m.
+Proof.
+  induction l as [| c l' IH]; intros m Hl.
+  - reflexivity.
+  - cbn in Hl. remember (is_ws c) as b. destruct b; [| discriminate].
+    injection Hl as Hl'. cbn. rewrite <- Heqb. cbn. f_equal. apply (IH m Hl').
+Qed.
+
+(* trailing whitespace suffix *)
+Definition ws_trail (w : list ascii) : list ascii := rev (ws_part (rev w)).
+
+Lemma ws_part_prefix : forall l m, skip_ws l <> [] -> ws_part (l ++ m) = ws_part l.
+Proof.
+  induction l as [| c l' IH]; intros m Hn.
+  - cbn in Hn. exfalso. exact (Hn eq_refl).
+  - cbn. remember (is_ws c) as b. destruct b; [| reflexivity].
+    f_equal. apply IH. cbn in Hn. rewrite <- Heqb in Hn. cbn in Hn. exact Hn.
+Qed.
+
+Lemma skip_ws_nil_all : forall w, skip_ws w = [] -> forall c, In c w -> is_ws c = true.
+Proof.
+  induction w as [| c' w' IH]; intros H c Hin.
+  - destruct Hin.
+  - cbn in H. remember (is_ws c') as b. destruct b.
+    + destruct Hin as [Hc | Hin']; [subst; symmetry; exact Heqb | exact (IH H c Hin')].
+    + discriminate.
+Qed.
+
+Lemma skip_ws_nil_conv : forall w, (forall c, In c w -> is_ws c = true) -> skip_ws w = [].
+Proof.
+  induction w as [| c w' IH]; intros H.
+  - reflexivity.
+  - cbn. rewrite (H c (in_eq c w')). apply IH. intros c0 Hin. apply (H c0 (in_cons c c0 w' Hin)).
+Qed.
+
+Lemma skip_ws_rev : forall w, skip_ws (rev w) = [] -> skip_ws w = [].
+Proof.
+  intros w H. apply skip_ws_nil_conv. intros c Hin.
+  apply (skip_ws_nil_all (rev w) H c). apply (proj1 (in_rev w c) Hin).
+Qed.
+
+Lemma ws_trail_suffix : forall l w, skip_ws w <> [] -> ws_trail (l ++ w) = ws_trail w.
+Proof.
+  intros l w Hn. unfold ws_trail. rewrite rev_app_distr.
+  rewrite (ws_part_prefix (rev w) (rev l)).
+  - reflexivity.
+  - intro Hrev. apply Hn. apply (skip_ws_rev w Hrev).
+Qed.
+
+Lemma ws_part_ws_trail (w : list ascii) : ws_part (ws_trail w) = ws_trail w.
+Proof.
+  unfold ws_trail. apply ws_part_all_ws. intros c Hin.
+  apply (ws_part_all_ws_char (rev w) c). apply (proj2 (in_rev (ws_part (rev w)) c) Hin).
+Qed.
+
+Lemma rev_ws_trail (w : list ascii) : w = rev (skip_ws (rev w)) ++ ws_trail w.
+Proof.
+  unfold ws_trail.
+  rewrite <- (rev_involutive w) at 1.
+  rewrite <- (ws_part_skip (rev w)) at 1.
+  rewrite rev_app_distr. reflexivity.
+Qed.
+
 Lemma length_ws_part_skip (w : list ascii) :
   List.length w = List.length (ws_part w) + List.length (skip_ws w).
 Proof. rewrite <- (ws_part_skip w) at 1. rewrite length_app. reflexivity. Qed.
+
+Lemma ws_trail_le (w : list ascii) : List.length (ws_trail w) <= List.length w.
+Proof.
+  pose proof (f_equal (@length ascii) (rev_ws_trail w)) as Hlen.
+  rewrite length_app in Hlen. lia.
+Qed.
+
+Lemma skip_ws_le (w : list ascii) : List.length (skip_ws w) <= List.length w.
+Proof. pose proof (length_ws_part_skip w). lia. Qed.
 
 Lemma skip_ws_many_sound (prefix w rest : list ascii) :
   denote surface_grammar (prefix ++ w ++ rest)
@@ -1140,53 +1250,316 @@ Proof.
     rewrite <- Hkpre. rewrite <- (ws_part_skip rest1) at 2. rewrite Eskip. rewrite <- (ws_part_skip rest2) at 2. app. rewrite Hipre. reflexivity.
 Qed.
 
-Lemma doc_mid_len (prefix spre rest' w' : list ascii) :
-  spre ++ rest' = w' ->
-  List.length prefix + List.length w' - List.length rest' + List.length (ws_part rest') = List.length (prefix ++ spre ++ ws_part rest').
+Lemma is_digit_ws : forall c, is_digit c = true -> is_ws c = false.
 Proof.
-  intros H. rewrite <- H. rewrite !length_app. simpl. lia.
+  intros c H. apply not_true_is_false. intro Hws.
+  unfold is_ws in Hws.
+  repeat (apply orb_true_iff in Hws; destruct Hws as [Hws | Hws]).
+  all: apply Ascii.eqb_eq in Hws; subst c; unfold is_digit in H; simpl in H; discriminate.
 Qed.
 
-Lemma doc_tail_len (prefix spre rest' w : list ascii) :
-  spre ++ ws_part rest' ++ skip_ws rest' = w ->
-  List.length prefix + List.length w = List.length (prefix ++ spre ++ ws_part rest') + List.length (skip_ws rest').
+Lemma is_ws_rb : is_ws "]"%char = false.
+Proof. unfold is_ws. simpl. reflexivity. Qed.
+
+Lemma ws_part_wps : forall w c wps, ws_part w = c :: wps -> ws_part wps = wps.
 Proof.
-  intros H. rewrite <- H. rewrite !length_app. simpl. lia.
+  intros w c wps H. apply ws_part_all_ws. intros c0 Hin.
+  pose proof (in_cons c c0 wps Hin) as Hcons. rewrite <- H in Hcons.
+  exact (ws_part_all_ws_char w c0 Hcons).
 Qed.
 
-Lemma parse_doc_many_sound : forall fuel prefix w ss,
+Lemma ws_part_tl_ws : forall w, ws_part (tl (ws_part w)) = tl (ws_part w).
+Proof.
+  intros w. apply ws_part_all_ws. intros c Hin.
+  apply (ws_part_all_ws_char w c). destruct (ws_part w) as [| c0 wps]; simpl in Hin; [destruct Hin |].
+  apply (in_cons c0 c wps Hin).
+Qed.
+
+Lemma skip_ws1_input (prefix w rest : list ascii) (c : ascii) (wps : list ascii) :
+  w = c :: wps ++ skip_ws w ->
+  prefix ++ w ++ rest = (prefix ++ [c]) ++ wps ++ (skip_ws w ++ rest).
+Proof.
+  intros H. revert w rest c wps H. induction prefix as [| p ps IH]; intros w rest c wps H.
+  - rewrite H at 1. simpl. f_equal. symmetry. apply app_assoc.
+  - simpl. f_equal. apply IH. exact H.
+Qed.
+
+(* ws1 (one-or-more ws) denotation for a non-empty leading ws block *)
+Lemma skip_ws1_sound (prefix w rest : list ascii) :
+  ws_part w <> [] ->
+  denote surface_grammar (prefix ++ w ++ rest) ws1_spec tt (List.length prefix) tt
+    tt (List.length prefix + List.length (ws_part w)).
+Proof.
+  intros Hn. unfold ws1_spec.
+  destruct (ws_part w) as [| c wps] eqn:Ewp; [exfalso; exact (Hn eq_refl) |].
+  assert (Hw : w = c :: wps ++ skip_ws w) by (rewrite <- (ws_part_skip w) at 1; rewrite Ewp; reflexivity).
+  assert (Hisws : is_ws c = true).
+  { unfold ws_part in Ewp. destruct w as [| c0 w0]; [discriminate |].
+    simpl in Ewp. remember (is_ws c0) as b. destruct b; [injection Ewp as Hc Hwps; subst c0; symmetry; exact Heqb | discriminate]. }
+  apply d_map with (a := (tt, List.map (fun _ : ascii => tt) (ws_part wps))).
+  apply d_seq with (γ' := tt) (j := S (List.length prefix)).
+  - apply d_map with (a := c). apply d_tok.
+    + rewrite Hw. exact (nth_error_app_cons c prefix ((wps ++ skip_ws w) ++ rest)).
+    + exact Hisws.
+  - rewrite (skip_ws1_input prefix w rest c wps Hw).
+    replace (S (List.length prefix)) with (List.length (prefix ++ [c])) by (rewrite length_app; simpl; lia).
+    replace (List.length prefix + List.length (c :: wps)) with (List.length (prefix ++ [c]) + List.length (ws_part wps)).
+    2: { rewrite (ws_part_wps w c wps Ewp). rewrite length_app. simpl. lia. }
+    apply (skip_ws_many_sound (prefix ++ [c]) wps (skip_ws w ++ rest)).
+Qed.
+
+Lemma take_digits_all_digit : forall w ds rest,
+  take_digits w = (ds, rest) -> forall d, In d ds -> is_digit d = true.
+Proof.
+  induction w as [| c w' IH]; simpl; intros ds rest H d Hin.
+  - injection H as Hds Hrest. subst ds. subst rest. destruct Hin.
+  - remember (is_digit c) as b. destruct b.
+    + destruct (take_digits w') as [ds' rest'] eqn:Etd.
+      injection H as Hds Hrest.
+      rewrite <- Hds in Hin. simpl in Hin. destruct Hin as [Hc | Hin'].
+      * subst d. symmetry. exact Heqb.
+      * exact (IH ds' rest' eq_refl d Hin').
+    + injection H as Hds Hrest. subst ds. subst rest. destruct Hin.
+Qed.
+
+Lemma list_last_exists : forall {A : Type} (l : list A), l <> [] -> exists l' d, l = l' ++ [d].
+Proof.
+  intros A l Hn. induction l as [| d l' IH].
+  - exfalso. exact (Hn eq_refl).
+  - destruct l' as [| d' l''].
+    + exists []. exists d. reflexivity.
+    + destruct (IH ltac:(discriminate)) as [l''' [dlast Hl]]. exists (d :: l'''). exists dlast. simpl. f_equal. exact Hl.
+Qed.
+
+Lemma parse_int_last_digit : forall w v rest,
+  parse_int w = Some (v, rest) ->
+  exists ipre' d, w = ipre' ++ d :: rest /\ is_digit d = true.
+Proof.
+  intros w v rest H. unfold parse_int in H.
+  destruct w as [| c w0]; [discriminate |].
+  remember (is_digit c) as b. destruct b; [| discriminate].
+  destruct (take_digits w0) as [ds rest'] eqn:Etd.
+  injection H as Hv Hrest. subst rest.
+  assert (Hsh : w0 = ds ++ rest') by (exact (take_digits_shape w0 ds rest' Etd)).
+  destruct (list_last_exists (c :: ds) ltac:(discriminate)) as [ipre' [d Hlast]].
+  exists ipre'. exists d. split.
+  - rewrite Hsh. rewrite app_comm_cons. rewrite Hlast. rewrite <- app_assoc. simpl. reflexivity.
+  - assert (Hin : In d (c :: ds)) by (rewrite Hlast; apply (in_app_iff ipre' [d] d); right; apply (in_eq d nil)).
+    simpl in Hin. destruct Hin as [Hc | Hds]; [subst; symmetry; exact Heqb | exact (take_digits_all_digit w0 ds rest' Etd d Hds)].
+Qed.
+
+(* a statement ends in a non-ws character *)
+Lemma parse_stmt_last_nonws : forall fuel w s rest,
+  parse_stmt fuel w = Some (s, rest) ->
+  exists spre' c, w = spre' ++ c :: rest /\ is_ws c = false.
+Proof.
+  intros fuel w s rest Hp. unfold parse_stmt in Hp.
+  destruct fuel as [| fuel']; [discriminate |].
+  destruct w as [| c w'] eqn:Ew; [discriminate |].
+  destruct (Ascii.eqb c "["%char) eqn:Eb.
+  - apply Ascii.eqb_eq in Eb. subst c.
+    destruct w' as [| c2 w''] eqn:Ew'; [discriminate |].
+    destruct (Ascii.eqb c2 "["%char) eqn:Eb2.
+    + apply Ascii.eqb_eq in Eb2. subst c2.
+      destruct (parse_key fuel' w'') as [[k r] |] eqn:Ek; [| discriminate].
+      destruct r as [| r1 r'] eqn:Er; [discriminate |].
+      destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
+      apply Ascii.eqb_eq in Er1. subst r1.
+      destruct r' as [| r2 rest'] eqn:Er'; [discriminate |].
+      destruct (Ascii.eqb r2 "]"%char) eqn:Er2; [| discriminate].
+      apply Ascii.eqb_eq in Er2. subst r2.
+      injection Hp as Hs Hrest. subst rest.
+      destruct (parse_key_shape fuel' w'' k ("]"%char :: "]"%char :: rest') Ek) as [kpre Hkpre].
+      exists ("["%char :: "["%char :: kpre ++ "]"%char :: nil). exists "]"%char.
+      split; [rewrite <- Hkpre; app | apply is_ws_rb].
+    + rewrite <- Ew' in *. destruct (parse_key fuel' w') as [[k r] |] eqn:Ek; [| discriminate].
+      destruct r as [| r1 rest'] eqn:Er; [discriminate |].
+      destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
+      apply Ascii.eqb_eq in Er1. subst r1.
+      injection Hp as Hs Hrest. subst rest.
+      destruct (parse_key_shape fuel' w' k ("]"%char :: rest') Ek) as [kpre Hkpre].
+      exists ("["%char :: kpre). exists "]"%char.
+      split; [rewrite <- Hkpre; app | apply is_ws_rb].
+  - rewrite <- Ew in *. destruct (parse_key fuel' w) as [[k rest1] |] eqn:Hk; [| discriminate].
+    destruct (skip_ws rest1) as [| e rest2] eqn:Eskip; [discriminate |].
+    destruct (Ascii.eqb e "="%char) eqn:Eeq; [| discriminate].
+    apply Ascii.eqb_eq in Eeq. subst e.
+    destruct (parse_int (skip_ws rest2)) as [[v rest3] |] eqn:Hi; [| discriminate].
+    injection Hp as Hs Hrest. subst rest.
+    destruct (parse_key_shape fuel' w k rest1 Hk) as [kpre Hkpre].
+    destruct (parse_int_shape (skip_ws rest2) v rest3 Hi) as [ipre Hipre].
+    (* the int ends in a digit *)
+    destruct (parse_int_last_digit (skip_ws rest2) v rest3 Hi) as [ipre' [d [Hip Hd]]].
+    exists (kpre ++ ws_part rest1 ++ "="%char :: ws_part rest2 ++ ipre'). exists d.
+    split.
+    + rewrite <- Hkpre. rewrite <- (ws_part_skip rest1) at 1. rewrite Eskip.
+      rewrite <- (ws_part_skip rest2) at 1. rewrite Hip. app.
+    + apply (is_digit_ws d Hd).
+Qed.
+
+(* the trailing-ws of a statement is empty *)
+Lemma ws_trail_spre : forall fuel w s rest spre,
+  parse_stmt fuel w = Some (s, rest) -> spre ++ rest = w -> ws_trail spre = [].
+Proof.
+  intros fuel w s rest spre Hp Hspre.
+  destruct (parse_stmt_last_nonws fuel w s rest Hp) as [spre' [c [Hw Hnws]]].
+  assert (Hsprec : spre = spre' ++ [c]).
+  { rewrite <- Hspre in Hw. apply (app_inv_tail rest spre (spre' ++ [c])). rewrite <- app_assoc. simpl. exact Hw. }
+  subst spre. unfold ws_trail. rewrite rev_app_distr. simpl.
+  simpl. rewrite Hnws. reflexivity.
+Qed.
+
+(* appending an all-ws suffix to a no-trailing-ws prefix *)
+Lemma ws_trail_app_ws : forall l rest, skip_ws rest = [] -> ws_trail l = [] -> ws_trail (l ++ rest) = rest.
+Proof.
+  intros l rest Hsk Htl. unfold ws_trail. unfold ws_trail in Htl. rewrite rev_app_distr.
+  (* rev rest is all ws *)
+  assert (Hrevws : ws_part (rev rest) = rev rest).
+  { apply ws_part_all_ws. intros c Hin. apply (skip_ws_nil_all rest Hsk c). apply (proj2 (in_rev rest c) Hin). }
+  rewrite (ws_part_app_all (rev rest) (rev l) Hrevws).
+  rewrite rev_app_distr. rewrite Htl. simpl. rewrite rev_involutive. reflexivity.
+Qed.
+
+Lemma stmt_spre_nonempty : forall fuel w s rest spre,
+  parse_stmt fuel w = Some (s, rest) -> spre ++ rest = w -> spre <> [].
+Proof.
+  intros fuel w s rest spre Hp Hspre.
+  destruct (parse_stmt_last_nonws fuel w s rest Hp) as [spre' [c [Hw Hnws]]].
+  intro Hspre0. rewrite Hspre0 in Hspre. simpl in Hspre.
+  rewrite <- Hspre in Hw. apply (f_equal (@length ascii)) in Hw. rewrite length_app in Hw. simpl in Hw. lia.
+Qed.
+
+Lemma ws_trail_app_pre : forall l spre, spre <> [] -> ws_trail spre = [] -> ws_trail (l ++ spre) = [].
+Proof.
+  intros l spre Hn Htl. unfold ws_trail. unfold ws_trail in Htl. rewrite rev_app_distr.
+  rewrite (ws_part_prefix (rev spre) (rev l)).
+  - exact Htl.
+  - intro Hsk.
+    apply (f_equal (@rev ascii)) in Htl. rewrite rev_involutive in Htl.
+    rewrite (ws_part_all_ws (rev spre) ltac:(intros c Hin; apply (skip_ws_nil_all (rev spre) Hsk c); exact Hin)) in Htl.
+    apply (f_equal (@rev ascii)) in Htl. rewrite rev_involutive in Htl. exact (Hn Htl).
+Qed.
+
+Lemma ws_trail_all_ws : forall w, skip_ws w = [] -> ws_trail w = w.
+Proof.
+  intros w H. unfold ws_trail.
+  assert (Hall : forall c, In c (rev w) -> is_ws c = true).
+  { intros c Hin. apply (skip_ws_nil_all w H c). apply (proj2 (in_rev w c) Hin). }
+  rewrite (ws_part_all_ws (rev w) Hall). apply rev_involutive.
+Qed.
+
+(* the document tail: statements separated by one-or-more ws *)
+Lemma parse_doc_tail_sound : forall fuel prefix w ss,
+  parse_doc fuel w = Some ss ->
+  ws_part w <> [] ->
+  denote surface_grammar (prefix ++ w)
+    (Many (Bind ws1_spec (fun _ => stmt_spec)))
+    tt (List.length prefix) ss tt (List.length prefix + List.length w - List.length (ws_trail w)).
+Proof.
+  induction fuel as [| fuel' IH]; intros prefix w ss Hparse Hws.
+  - simpl in Hparse. destruct (skip_ws w) as [| c w'] eqn:Esw; [| discriminate].
+    injection Hparse as Hss. subst ss.
+    rewrite (ws_trail_all_ws w Esw). replace (List.length prefix + List.length w - List.length w) with (List.length prefix) by lia. apply d_many_nil.
+  - simpl in Hparse.
+    destruct (skip_ws w) as [| c w'] eqn:Ew.
+    + injection Hparse as Hss. subst ss.
+      rewrite (ws_trail_all_ws w Ew). replace (List.length prefix + List.length w - List.length w) with (List.length prefix) by lia. apply d_many_nil.
+    + destruct (parse_stmt fuel' (c :: w')) as [[s rest'] |] eqn:Es; [| discriminate].
+      destruct (skip_ws rest') as [| c2 rest''] eqn:Er.
+      * injection Hparse as Hss. subst ss.
+        destruct (parse_stmt_shape fuel' (c :: w') s rest' Es) as [spre Hspre].
+        apply d_many_cons with (γ' := tt) (j := List.length prefix + List.length (ws_part w) + List.length spre).
+        -- apply d_bind with (a := tt) (γ' := tt) (j := List.length prefix + List.length (ws_part w)).
+           ++ pose proof (skip_ws1_sound prefix w (@nil ascii) Hws) as Hw1. rewrite (app_nil_r w) in Hw1. exact Hw1.
+           ++ pose proof (parse_stmt_sound fuel' (prefix ++ ws_part w) (skip_ws w) s rest' ltac:(rewrite Ew; exact Es)) as Hsnd.
+              rewrite <- app_assoc in Hsnd. rewrite (ws_part_skip w) in Hsnd. rewrite length_app in Hsnd.
+              replace (List.length prefix + List.length (ws_part w) + List.length (skip_ws w) - List.length rest') with (List.length prefix + List.length (ws_part w) + List.length spre) in Hsnd by (rewrite Ew; rewrite <- Hspre; rewrite length_app; simpl; lia).
+              exact Hsnd.
+        -- assert (Hwt : ws_trail w = rest').
+           { rewrite <- (ws_part_skip w). rewrite Ew. rewrite <- Hspre. rewrite app_assoc.
+             apply (ws_trail_app_ws (ws_part w ++ spre) rest' ltac:(rewrite Er; reflexivity) ltac:(exact (ws_trail_app_pre (ws_part w) spre (stmt_spre_nonempty fuel' (c :: w') s rest' spre Es Hspre) (ws_trail_spre fuel' (c :: w') s rest' spre Es Hspre)))). }
+           assert (Hlen : List.length w = List.length (ws_part w) + List.length (skip_ws w)) by (symmetry; rewrite <- length_app; apply (f_equal (@length ascii) (ws_part_skip w))).
+           assert (Hskip : List.length (skip_ws w) = List.length spre + List.length rest') by (rewrite Ew; rewrite <- Hspre; rewrite length_app; reflexivity).
+           replace (List.length prefix + List.length w - List.length (ws_trail w)) with (List.length prefix + List.length (ws_part w) + List.length spre)
+             by (rewrite Hwt, Hlen, Hskip; lia).
+           apply d_many_nil.
+      * destruct rest' as [| c2' rest0] eqn:Erest; [discriminate |].
+        destruct (is_ws c2') eqn:Ews; [| discriminate].
+        destruct (parse_doc fuel' (c2' :: rest0)) as [ss' |] eqn:Ed; [| discriminate].
+        injection Hparse as Hss. subst ss.
+        destruct (parse_stmt_shape fuel' (c :: w') s (c2' :: rest0) Es) as [spre Hspre].
+        assert (Hws' : ws_part (c2' :: rest0) <> []) by (simpl; rewrite Ews; discriminate).
+        assert (Hwt : ws_trail w = ws_trail (c2' :: rest0)).
+        { rewrite <- (ws_part_skip w). rewrite Ew. rewrite <- Hspre. rewrite app_assoc.
+          apply (ws_trail_suffix (ws_part w ++ spre) (c2' :: rest0)).
+          intro Hsk. rewrite Hsk in Er. discriminate. }
+        assert (Hwlen : List.length w = List.length (ws_part w) + List.length spre + List.length (c2' :: rest0)).
+        { symmetry. rewrite <- !length_app. apply (f_equal (@length ascii)). rewrite <- (ws_part_skip w) at 2. rewrite Ew. rewrite <- Hspre. app. }
+        apply d_many_cons with (γ' := tt) (j := List.length prefix + List.length (ws_part w) + List.length spre).
+        -- apply d_bind with (a := tt) (γ' := tt) (j := List.length prefix + List.length (ws_part w)).
+           ++ pose proof (skip_ws1_sound prefix w (@nil ascii) Hws) as Hw1. rewrite (app_nil_r w) in Hw1. exact Hw1.
+           ++ pose proof (parse_stmt_sound fuel' (prefix ++ ws_part w) (skip_ws w) s (c2' :: rest0) ltac:(rewrite Ew; exact Es)) as Hsnd.
+              rewrite <- app_assoc in Hsnd. rewrite (ws_part_skip w) in Hsnd. rewrite length_app in Hsnd.
+              replace (List.length prefix + List.length (ws_part w) + List.length (skip_ws w) - List.length (c2' :: rest0)) with (List.length prefix + List.length (ws_part w) + List.length spre) in Hsnd by (rewrite Ew; rewrite <- Hspre; rewrite length_app; simpl; lia).
+              exact Hsnd.
+        -- assert (Hw : (ws_part w ++ spre) ++ c2' :: rest0 = w).
+           { rewrite <- (ws_part_skip w) at 2. rewrite Ew. rewrite <- Hspre. app. }
+           pose proof (IH (prefix ++ ws_part w ++ spre) (c2' :: rest0) ss' Ed Hws') as Htail.
+           rewrite <- app_assoc in Htail. rewrite Hw in Htail. rewrite !length_app in Htail. rewrite !Nat.add_assoc in Htail.
+           replace (List.length prefix + List.length w - List.length (ws_trail w)) with (List.length prefix + List.length (ws_part w) + List.length spre + List.length (c2' :: rest0) - List.length (ws_trail (c2' :: rest0))) by (rewrite Hwt, Hwlen; simpl; lia).
+           exact Htail.
+Qed.
+
+(* the document body: stmt (ws1 stmt)*, ending before the trailing ws *)
+Lemma parse_doc_body_sound : forall fuel prefix w ss,
   parse_doc fuel w = Some ss ->
   denote surface_grammar (prefix ++ skip_ws w)
-    (Many (Bind stmt_spec (fun s => Bind ws_spec (fun _ => Pure s))))
-    tt (List.length prefix) ss tt (List.length prefix + List.length (skip_ws w)).
+    (Alt (Pure ([] : Document))
+        (Map (fun p : stmt * list stmt => fst p :: snd p)
+           (Seq stmt_spec (Many (Bind ws1_spec (fun _ => stmt_spec))))))
+    tt (List.length prefix) ss tt (List.length prefix + List.length (skip_ws w) - List.length (ws_trail (skip_ws w))).
 Proof.
   induction fuel as [| fuel' IH]; intros prefix w ss Hparse.
   - simpl in Hparse.
-    destruct (skip_ws w) as [| c w']; [| discriminate].
-    injection Hparse as Hss. subst ss. replace (List.length prefix + List.length (@nil ascii)) with (List.length prefix) by (simpl; lia). apply d_many_nil.
+    destruct (skip_ws w) as [| c w'] eqn:Ew; [| discriminate].
+    injection Hparse as Hss. subst ss.
+    replace (List.length prefix + List.length [] - List.length (ws_trail [])) with (List.length prefix) by (simpl; lia).
+    apply d_alt_l. apply d_pure.
   - simpl in Hparse.
     destruct (skip_ws w) as [| c w'] eqn:Ew.
-    + injection Hparse as Hss. subst ss. replace (List.length prefix + List.length (@nil ascii)) with (List.length prefix) by (simpl; lia). apply d_many_nil.
+    + injection Hparse as Hss. subst ss.
+      replace (List.length prefix + List.length [] - List.length (ws_trail [])) with (List.length prefix) by (simpl; lia).
+      apply d_alt_l. apply d_pure.
     + destruct (parse_stmt fuel' (c :: w')) as [[s rest'] |] eqn:Es; [| discriminate].
-      destruct (parse_doc fuel' rest') as [ss' |] eqn:Ed; [| discriminate].
-      injection Hparse as Hss. subst ss.
-      destruct (parse_stmt_shape fuel' (c :: w') s rest' Es) as [spre Hspre].
-      apply d_many_cons with (γ' := tt) (j := List.length prefix + List.length (c :: w') - List.length rest' + List.length (ws_part rest')).
-      * apply d_bind with (a := s) (γ' := tt) (j := List.length prefix + List.length (c :: w') - List.length rest').
-        -- apply (parse_stmt_sound fuel' prefix (c :: w') s rest' Es).
-        -- apply d_bind with (a := tt) (γ' := tt) (j := List.length prefix + List.length (c :: w') - List.length rest' + List.length (ws_part rest')).
-           ++ replace (List.length prefix + List.length (c :: w') - List.length rest' + List.length (ws_part rest')) with (List.length (prefix ++ (c :: w')) - List.length rest' + List.length (ws_part rest')) by pos.
-              replace (List.length prefix + List.length (c :: w') - List.length rest') with (List.length (prefix ++ (c :: w')) - List.length rest') by pos.
-              apply (skip_ws_mid_sound (prefix ++ (c :: w')) rest').
-              exists (prefix ++ spre). rewrite <- app_assoc. rewrite Hspre. reflexivity.
-           ++ apply d_pure.
-      * rewrite <- Ew in *.
-        replace (prefix ++ skip_ws w) with ((prefix ++ spre ++ ws_part rest') ++ skip_ws rest')
-          by (rewrite <- Hspre; rewrite <- (ws_part_skip rest') at 3; app).
-        replace (List.length prefix + List.length (skip_ws w) - List.length rest' + List.length (ws_part rest')) with (List.length (prefix ++ spre ++ ws_part rest')) by (symmetry; apply (doc_mid_len prefix spre rest' (skip_ws w) Hspre)).
-        assert (Htail : spre ++ ws_part rest' ++ skip_ws rest' = skip_ws w) by (rewrite <- Hspre; rewrite <- (ws_part_skip rest') at 3; app).
-        replace (List.length prefix + List.length (skip_ws w)) with (List.length (prefix ++ spre ++ ws_part rest') + List.length (skip_ws rest')) by (symmetry; apply (doc_tail_len prefix spre rest' (skip_ws w) Htail)).
-        apply (IH (prefix ++ spre ++ ws_part rest') rest' ss' Ed).
+      destruct (skip_ws rest') as [| c2 rest''] eqn:Er.
+      * injection Hparse as Hss. subst ss.
+        destruct (parse_stmt_shape fuel' (c :: w') s rest' Es) as [spre Hspre].
+        replace (List.length prefix + List.length (c :: w') - List.length (ws_trail (c :: w'))) with (List.length prefix + List.length spre).
+        2: { rewrite <- Hspre. rewrite (ws_trail_app_ws spre rest' Er (ws_trail_spre fuel' (c :: w') s rest' spre Es Hspre)). rewrite length_app. simpl. lia. }
+        apply d_alt_r. apply d_map with (a := (s, @nil stmt)).
+        apply d_seq with (γ' := tt) (j := List.length prefix + List.length spre).
+        -- pose proof (parse_stmt_sound fuel' prefix (c :: w') s rest' Es) as Hsnd.
+           replace (List.length prefix + List.length (c :: w') - List.length rest') with (List.length prefix + List.length spre) in Hsnd by (rewrite <- Hspre; rewrite length_app; simpl; lia).
+           exact Hsnd.
+        -- apply d_many_nil.
+      * destruct rest' as [| c2' rest0] eqn:Erest; [discriminate |].
+        destruct (is_ws c2') eqn:Ews; [| discriminate].
+        destruct (parse_doc fuel' (c2' :: rest0)) as [ss' |] eqn:Ed; [| discriminate].
+        injection Hparse as Hss. subst ss.
+        destruct (parse_stmt_shape fuel' (c :: w') s (c2' :: rest0) Es) as [spre Hspre].
+        assert (Hws' : ws_part (c2' :: rest0) <> []) by (simpl; rewrite Ews; discriminate).
+        apply d_alt_r. apply d_map with (a := (s, ss')).
+        apply d_seq with (γ' := tt) (j := List.length prefix + List.length spre).
+        -- pose proof (parse_stmt_sound fuel' prefix (c :: w') s (c2' :: rest0) Es) as Hsnd.
+           replace (List.length prefix + List.length (c :: w') - List.length (c2' :: rest0)) with (List.length prefix + List.length spre) in Hsnd by (rewrite <- Hspre; rewrite length_app; simpl; lia).
+           exact Hsnd.
+        -- assert (Hw : c :: w' = spre ++ c2' :: rest0). { rewrite <- Hspre. reflexivity. }
+           assert (Hwt : ws_trail (c :: w') = ws_trail (c2' :: rest0)). { rewrite Hw. apply (ws_trail_suffix spre (c2' :: rest0)). intro Hsk. rewrite Hsk in Er. discriminate. }
+           assert (Hwlen : List.length (c :: w') = List.length spre + List.length (c2' :: rest0)). { rewrite Hw. rewrite length_app. reflexivity. }
+           pose proof (parse_doc_tail_sound fuel' (prefix ++ spre) (c2' :: rest0) ss' Ed Hws') as Htail.
+           rewrite <- app_assoc in Htail. rewrite <- Hw in Htail. rewrite !length_app in Htail.
+           replace (List.length prefix + List.length (c :: w') - List.length (ws_trail (c :: w'))) with (List.length prefix + List.length spre + List.length (c2' :: rest0) - List.length (ws_trail (c2' :: rest0))) by (rewrite Hwt, Hwlen; simpl; lia).
+           exact Htail.
 Qed.
 
 Lemma ws_direct_sound (w : list ascii) :
@@ -1205,10 +1578,16 @@ Proof.
   intros fuel w doc Hparse. unfold doc_spec.
   apply d_bind with (a := tt) (γ' := tt) (j := List.length (ws_part w)).
   - apply ws_direct_sound.
-  - replace (List.length w) with (List.length (ws_part w) + List.length (skip_ws w)) by (symmetry; apply (length_ws_part_skip w)).
-    apply (eq_rect (ws_part w ++ skip_ws w)
-             (fun x : list ascii => denote surface_grammar x (Many (Bind stmt_spec (fun s => Bind ws_spec (fun _ => Pure s)))) tt (List.length (ws_part w)) doc tt (List.length (ws_part w) + List.length (skip_ws w)))
-             (parse_doc_many_sound fuel (ws_part w) w doc Hparse) w (ws_part_skip w)).
+  - apply d_bind with (a := doc) (γ' := tt) (j := List.length w - List.length (ws_trail (skip_ws w))).
+    + replace (List.length w - List.length (ws_trail (skip_ws w))) with (List.length (ws_part w) + List.length (skip_ws w) - List.length (ws_trail (skip_ws w))) by (rewrite (length_ws_part_skip w); reflexivity).
+      pose proof (parse_doc_body_sound fuel (ws_part w) w doc Hparse) as Hb.
+      rewrite (ws_part_skip w) in Hb. exact Hb.
+    + apply d_bind with (a := tt) (γ' := tt) (j := List.length w).
+      -- pose proof (skip_ws_mid_sound w (ws_trail (skip_ws w))) as Hs.
+         replace (List.length w - List.length (ws_trail (skip_ws w)) + List.length (ws_part (ws_trail (skip_ws w)))) with (List.length w) in Hs by (rewrite (ws_part_ws_trail (skip_ws w)); symmetry; apply (Nat.sub_add (List.length (ws_trail (skip_ws w))) (List.length w) (Nat.le_trans (List.length (ws_trail (skip_ws w))) (List.length (skip_ws w)) (List.length w) (ws_trail_le (skip_ws w)) (skip_ws_le w)))).
+         apply Hs. exists (ws_part w ++ rev (skip_ws (rev (skip_ws w)))).
+         rewrite <- app_assoc. rewrite <- (rev_ws_trail (skip_ws w)). apply (ws_part_skip w).
+      -- apply d_pure.
 Qed.
 
 
@@ -1229,7 +1608,15 @@ Fixpoint direct_parse (fuel : nat) (ns : Namespace) (w : list ascii) : option Na
           | Some (s, rest) =>
               match step ns s with
               | None => None
-              | Some ns' => direct_parse fuel' ns' rest
+              | Some ns' =>
+                  match skip_ws rest with
+                  | [] => Some ns'
+                  | _ =>
+                      match rest with
+                      | [] => None
+                      | c :: _ => if is_ws c then direct_parse fuel' ns' rest else None
+                      end
+                  end
               end
           end
       end
@@ -1247,7 +1634,16 @@ Lemma parse_doc_S (fuel : nat) (w : list ascii) :
   | [] => Some []
   | _ => match parse_stmt fuel (skip_ws w) with
          | None => None
-         | Some (s, rest) => match parse_doc fuel rest with None => None | Some ss => Some (s :: ss) end
+         | Some (s, rest) =>
+             match skip_ws rest with
+             | [] => Some [s]
+             | _ => match rest with
+                    | [] => None
+                    | c :: _ => if is_ws c
+                        then match parse_doc fuel rest with None => None | Some ss => Some (s :: ss) end
+                        else None
+                    end
+             end
          end
   end.
 Proof. reflexivity. Qed.
@@ -1265,11 +1661,21 @@ Lemma direct_parse_S (fuel : nat) (ns : Namespace) (w : list ascii) :
   | [] => Some ns
   | _ => match parse_stmt fuel (skip_ws w) with
          | None => None
-         | Some (s, rest) => match step ns s with None => None | Some ns' => direct_parse fuel ns' rest end
+         | Some (s, rest) =>
+             match step ns s with
+             | None => None
+             | Some ns' =>
+                 match skip_ws rest with
+                 | [] => Some ns'
+                 | _ => match rest with
+                        | [] => None
+                        | c :: _ => if is_ws c then direct_parse fuel ns' rest else None
+                        end
+                 end
+             end
          end
   end.
 Proof. reflexivity. Qed.
-
 Lemma direct_parse_to_run : forall fuel ns w ns',
   direct_parse fuel ns w = Some ns' ->
   exists doc, parse_doc fuel w = Some doc /\ run ns doc = Some ns'.
@@ -1285,10 +1691,18 @@ Proof.
       rewrite parse_doc_S. rewrite Ew. simpl. auto.
     + destruct (parse_stmt fuel' (c :: w')) as [[s rest] |] eqn:Es; [| discriminate].
       destruct (step ns s) as [ns1 |] eqn:Estep; [| discriminate].
-      apply (IH ns1 rest ns') in H. destruct H as [doc [Hp Hr]].
-      exists (s :: doc). split.
-      * rewrite parse_doc_S. rewrite Ew. simpl. rewrite Es. rewrite Hp. reflexivity.
-      * simpl. rewrite Estep. exact Hr.
+      destruct (skip_ws rest) as [| c2 rest''] eqn:Er.
+      * injection H as Hn. subst ns'. exists [s]. split.
+        -- rewrite parse_doc_S. rewrite Ew. simpl. rewrite Es. simpl. rewrite Er. simpl. reflexivity.
+        -- simpl. rewrite Estep. reflexivity.
+      * destruct rest as [| c2' rest0] eqn:Erest; [discriminate |].
+        destruct (is_ws c2') eqn:Ews; [| discriminate].
+        apply (IH ns1 (c2' :: rest0) ns') in H. destruct H as [doc [Hp Hr]].
+        exists (s :: doc). split.
+        -- rewrite parse_doc_S. rewrite Ew. simpl. rewrite Es. simpl. rewrite Ews. simpl.
+           assert (Er0 : skip_ws rest0 = c2 :: rest'') by (unfold skip_ws in Er; rewrite Ews in Er; simpl in Er; exact Er).
+           rewrite Er0. simpl. rewrite Hp. reflexivity.
+        -- simpl. rewrite Estep. exact Hr.
 Qed.
 
 Lemma run_to_direct_parse : forall fuel ns w ns',
@@ -1305,11 +1719,18 @@ Proof.
     + injection Hp as Hd. subst doc. simpl in Hr.
       injection Hr as Hn. subst ns'. rewrite direct_parse_S. simpl. rewrite Ew. reflexivity.
     + destruct (parse_stmt fuel' (c :: w')) as [[s rest] |] eqn:Es; [| discriminate].
-      destruct (parse_doc fuel' rest) as [doc' |] eqn:Ed; [| discriminate].
-      injection Hp as Hd. subst doc. simpl in Hr.
-      destruct (step ns s) as [ns1 |] eqn:Estep; [| discriminate].
-      rewrite direct_parse_S. simpl. rewrite Ew. rewrite Es. rewrite Estep.
-      apply (IH ns1 rest ns'). exists doc'. split; [exact Ed | exact Hr].
+      destruct (skip_ws rest) as [| c2 rest''] eqn:Er.
+      * injection Hp as Hd. subst doc. simpl in Hr.
+        destruct (step ns s) as [ns1 |] eqn:Estep; [| discriminate].
+        injection Hr as Hn. subst ns'.
+        rewrite direct_parse_S. simpl. rewrite Ew. rewrite Es. rewrite Estep. rewrite Er. simpl. reflexivity.
+      * destruct rest as [| c2' rest0] eqn:Erest; [discriminate |].
+        destruct (is_ws c2') eqn:Ews; [| discriminate].
+        destruct (parse_doc fuel' (c2' :: rest0)) as [doc' |] eqn:Ed; [| discriminate].
+        injection Hp as Hd. subst doc. simpl in Hr.
+        destruct (step ns s) as [ns1 |] eqn:Estep; [| discriminate].
+        rewrite direct_parse_S. simpl. rewrite Ew. rewrite Es. rewrite Estep. rewrite Er. simpl. rewrite Ews.
+        apply (IH ns1 (c2' :: rest0) ns'). exists doc'. split; [exact Ed | exact Hr].
 Qed.
 
 Lemma direct_parse_equiv : forall fuel ns w ns',
@@ -1940,15 +2361,7 @@ Proof.
   congruence.
 Qed.
 
-(* After a key comes ws then '=': the position just past the key is
-   non-ident and non-dot (the maximality demanded by key_complete). *)
-Lemma is_digit_ws : forall c, is_digit c = true -> is_ws c = false.
-Proof.
-  intros c H. apply not_true_is_false. intro Hws.
-  unfold is_ws in Hws.
-  repeat (apply orb_true_iff in Hws; destruct Hws as [Hws | Hws]).
-  all: apply Ascii.eqb_eq in Hws; subst c; unfold is_digit in H; simpl in H; discriminate.
-Qed.
+
 
 Lemma is_ws_eq : is_ws "="%char = false.
 Proof. unfold is_ws. simpl. reflexivity. Qed.
