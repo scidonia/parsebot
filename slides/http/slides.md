@@ -289,14 +289,9 @@ Decoded end-to-end; correct byte count verified.
 | 67.12 MB | 1024 | 7.10 s | 9.0 MB/s |
 
 <div class="text-left text-sm text-gray-400 mt-4">
-Small chunks (realistic, 4 KB):
+Time doubles when input doubles → **linear**. Small 4 KB chunks: 1 MB in
+0.075 s (13.4 MB/s), 16 MB in 1.24 s (12.9 MB/s) — flat too.
 </div>
-
-| input | chunks | time | throughput |
-| --- | --- | --- | --- |
-| 1.05 MB | 256 | 0.075 s | 13.4 MB/s |
-| 4.20 MB | 1024 | 0.30 s | 13.2 MB/s |
-| 16.81 MB | 4096 | 1.24 s | 12.9 MB/s |
 
 ---
 layout: default
