@@ -14,7 +14,7 @@
    a certified decision procedure `run`, and runnable examples.  The
    character-level surface grammar (the BNF) is a separate stage. *)
 
-From Stdlib Require Import List Bool Nat Ascii.
+From Stdlib Require Import List Bool Nat Ascii Lia ZArith.
 Import ListNotations.
 
 (* ------------------------------------------------------------------------- *)
@@ -328,12 +328,12 @@ Qed.
 (* The surface grammar (BNF) — characters to statements                       *)
 (* ------------------------------------------------------------------------- *)
 
-Definition surface_grammar : Grammar unit unit tom_nt :=
+Definition surface_grammar : Grammar ascii unit tom_nt :=
   fun (A : Type) (n : tom_nt A) => match n with end.
 
 (* a literal character *)
 Definition ch (c : ascii) : Spec ascii unit tom_nt unit :=
-  Map (fun _ : ascii => tt) (Tok (fun c' => Ascii.eqb c' c = true)).
+  Map (fun _ : ascii => tt) (Tok (fun c' => c' = c)).
 
 Definition is_digit (c : ascii) : bool :=
   Ascii.eqb c "0"%char || Ascii.eqb c "1"%char || Ascii.eqb c "2"%char
@@ -350,8 +350,9 @@ Definition is_ident_char (c : ascii) : bool :=
   negb (is_ws c || Ascii.eqb c "="%char || Ascii.eqb c "["%char
         || Ascii.eqb c "]"%char || Ascii.eqb c "."%char).
 
-Definition ws_spec : Spec ascii unit tom_nt (list unit) :=
-  Many (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true))).
+Definition ws_spec : Spec ascii unit tom_nt unit :=
+  Map (fun _ : list unit => tt)
+      (Many (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true)))).
 
 Definition digit_spec : Spec ascii unit tom_nt ascii := Tok (fun c => is_digit c = true).
 
@@ -421,10 +422,10 @@ Definition doc_spec : Spec ascii unit tom_nt Document :=
 (* The surface parser (fuel-bounded)                                          *)
 (* ------------------------------------------------------------------------- *)
 
-Fixpoint collect_digits (w : list ascii) (acc : list ascii) : list ascii * list ascii :=
+Fixpoint take_digits (w : list ascii) : list ascii * list ascii :=
   match w with
-  | c :: rest => if is_digit c then collect_digits rest (acc ++ [c]) else (acc, w)
-  | [] => (acc, [])
+  | c :: rest => if is_digit c then let (ds, r) := take_digits rest in (c :: ds, r) else (nil, w)
+  | [] => (nil, nil)
   end.
 
 Fixpoint skip_ws (w : list ascii) : list ascii :=
@@ -433,17 +434,17 @@ Fixpoint skip_ws (w : list ascii) : list ascii :=
   | [] => []
   end.
 
-Fixpoint collect_ident (w : list ascii) (acc : list ascii) : list ascii * list ascii :=
+Fixpoint take_ident (w : list ascii) : list ascii * list ascii :=
   match w with
-  | c :: rest => if is_ident_char c then collect_ident rest (acc ++ [c]) else (acc, w)
-  | [] => (acc, [])
+  | c :: rest => if is_ident_char c then let (ds, r) := take_ident rest in (c :: ds, r) else (nil, w)
+  | [] => (nil, nil)
   end.
 
 (* parse an integer: returns (value, rest) *)
 Definition parse_int (w : list ascii) : option (nat * list ascii) :=
   match w with
   | c :: rest => if is_digit c
-      then let (ds, rest') := collect_digits rest [c] in Some (digits_to_nat ds 0, rest')
+      then let (ds, rest') := take_digits rest in Some (digits_to_nat (c :: ds) 0, rest')
       else None
   | [] => None
   end.
@@ -452,7 +453,7 @@ Definition parse_int (w : list ascii) : option (nat * list ascii) :=
 Definition parse_ident (w : list ascii) : option (seg * list ascii) :=
   match w with
   | c :: rest => if is_ident_char c
-      then let (ds, rest') := collect_ident rest [c] in Some (ds, rest')
+      then let (ds, rest') := take_ident rest in Some (c :: ds, rest')
       else None
   | [] => None
   end.
@@ -466,12 +467,14 @@ Fixpoint parse_key (fuel : nat) (w : list ascii) : option (key * list ascii) :=
       | None => None
       | Some (s, rest) =>
           match rest with
-          | "."%char :: rest' =>
-              match parse_key fuel' rest' with
-              | None => None
-              | Some (ks, rest'') => Some (s :: ks, rest'')
-              end
-          | _ => Some ([s], rest)
+          | c :: rest' =>
+              if Ascii.eqb c "."%char then
+                match parse_key fuel' rest' with
+                | None => None
+                | Some (ks, rest'') => Some (s :: ks, rest'')
+                end
+              else Some ([s], rest)
+          | [] => Some ([s], [])
           end
       end
   end.
@@ -545,3 +548,303 @@ Definition ex_text : list ascii :=
 
 Eval compute in parse_doc 100 ex_text.
 Eval compute in parse_then_validate ex_text.
+
+(* ------------------------------------------------------------------------- *)
+(* Soundness: the surface parser refines `denote`                             *)
+(* ------------------------------------------------------------------------- *)
+
+Set Bullet Behavior "None".
+
+Lemma nth_error_app_cons (x : ascii) (prefix rest : list ascii) :
+  nth_error (prefix ++ x :: rest) (List.length prefix) = Some x.
+Proof.
+  induction prefix as [| p ps IH]; simpl; [reflexivity | exact IH].
+Qed.
+
+Lemma ch_sound (c : ascii) (prefix rest : list ascii) :
+  denote surface_grammar (prefix ++ c :: rest) (ch c) tt (List.length prefix) tt tt (S (List.length prefix)).
+Proof.
+  unfold ch. apply d_map with (a := c). apply d_tok.
+  - exact (nth_error_app_cons c prefix rest).
+  - reflexivity.
+Qed.
+
+(* The skipped whitespace run at the head of `w`. *)
+Fixpoint ws_part (w : list ascii) : list ascii :=
+  match w with
+  | c :: rest => if is_ws c then c :: ws_part rest else []
+  | [] => []
+  end.
+
+Lemma ws_part_skip (w : list ascii) : ws_part w ++ skip_ws w = w.
+Proof.
+  induction w as [| c w' IH]; simpl.
+  - reflexivity.
+  - destruct (is_ws c) eqn:E; simpl.
+    + rewrite IH. reflexivity.
+    + reflexivity.
+Qed.
+
+Lemma length_ws_part_skip (w : list ascii) :
+  List.length w = List.length (ws_part w) + List.length (skip_ws w).
+Proof. rewrite <- (ws_part_skip w) at 1. rewrite length_app. reflexivity. Qed.
+
+Lemma skip_ws_many_sound (prefix w rest : list ascii) :
+  denote surface_grammar (prefix ++ w ++ rest)
+    (Many (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true))))
+    tt (List.length prefix) (List.map (fun _ : ascii => tt) (ws_part w))
+    tt (List.length prefix + List.length (ws_part w)).
+Proof.
+  revert prefix rest. induction w as [| c w' IH]; intros prefix rest; simpl.
+  - rewrite Nat.add_0_r. apply d_many_nil.
+  - destruct (is_ws c) eqn:Ews.
+    + apply d_many_cons with (γ' := tt) (j := S (List.length prefix)).
+      * apply d_map with (a := c). apply d_tok.
+        -- exact (nth_error_app_cons c prefix (w' ++ rest)).
+        -- exact Ews.
+      * replace (prefix ++ c :: w' ++ rest) with ((prefix ++ [c]) ++ w' ++ rest) by (rewrite <- app_assoc; simpl; reflexivity).
+        replace (S (List.length prefix)) with (List.length (prefix ++ [c])) by (rewrite length_app; simpl; lia).
+        replace (List.length prefix + List.length (c :: ws_part w')) with (List.length (prefix ++ [c]) + List.length (ws_part w')) by (rewrite length_app; simpl; lia).
+        apply (IH (prefix ++ [c]) rest).
+    + rewrite Nat.add_0_r. apply d_many_nil.
+Qed.
+
+Lemma skip_ws_sound (prefix w rest : list ascii) :
+  denote surface_grammar (prefix ++ w ++ rest) ws_spec tt (List.length prefix)
+    tt tt (List.length prefix + List.length (ws_part w)).
+Proof.
+  unfold ws_spec. apply d_map with (a := List.map (fun _ : ascii => tt) (ws_part w)). apply skip_ws_many_sound.
+Qed.
+
+Lemma skip_ws_mid_sound (l m : list ascii) :
+  { pre : list ascii & pre ++ m = l } ->
+  denote surface_grammar l ws_spec tt (List.length l - List.length m) tt
+    tt (List.length l - List.length m + List.length (ws_part m)).
+Proof.
+  intros [pre Hpre].
+  replace (List.length l - List.length m) with (List.length pre) by (rewrite <- Hpre; rewrite length_app; lia).
+  replace l with (pre ++ m ++ @nil ascii) by (rewrite <- Hpre; rewrite app_nil_r; reflexivity).
+  apply (skip_ws_sound pre m (@nil ascii)).
+Qed.
+
+(* ------------------------------------------------------------------------- *)
+(* Integers                                                                   *)
+(* ------------------------------------------------------------------------- *)
+
+Lemma take_digits_sound (prefix w : list ascii) :
+  denote surface_grammar (prefix ++ w) (Many digit_spec)
+    tt (List.length prefix) (fst (take_digits w)) tt (List.length prefix + List.length (fst (take_digits w))).
+Proof.
+  revert prefix. induction w as [| c w' IH]; intros prefix; simpl.
+  - rewrite Nat.add_0_r. apply d_many_nil.
+  - destruct (is_digit c) eqn:Ed.
+    + destruct (take_digits w') as [ds rest'] eqn:Eds; simpl in *.
+      apply d_many_cons with (γ' := tt) (j := S (List.length prefix)).
+      * apply d_tok; [ exact (nth_error_app_cons c prefix w') | exact Ed ].
+      * replace (prefix ++ c :: w') with ((prefix ++ [c]) ++ w') by (rewrite <- app_assoc; simpl; reflexivity).
+        replace (S (List.length prefix)) with (List.length (prefix ++ [c])) by (rewrite length_app; simpl; lia).
+        replace (List.length prefix + S (List.length ds)) with (List.length (prefix ++ [c]) + List.length ds) by (rewrite length_app; simpl; lia).
+        apply (IH (prefix ++ [c])).
+    + rewrite Nat.add_0_r. apply d_many_nil.
+Qed.
+
+Lemma take_digits_shape (w ds rest : list ascii) :
+  take_digits w = (ds, rest) -> w = ds ++ rest.
+Proof.
+  revert ds rest.
+  induction w as [| c w' IH]; intros ds rest Htake; simpl in Htake.
+  - injection Htake as Hds Hrest. subst ds rest. reflexivity.
+  - destruct (is_digit c) eqn:Ed.
+    + destruct (take_digits w') as [ds' rest'] eqn:Erec.
+      injection Htake as Hds Hrest. subst ds rest.
+      simpl. f_equal. apply (IH ds' rest' eq_refl).
+    + injection Htake as Hds Hrest. subst ds rest. reflexivity.
+Qed.
+
+Lemma parse_int_sound (prefix w : list ascii) (n : nat) (rest : list ascii) :
+  parse_int w = Some (n, rest) ->
+  denote surface_grammar (prefix ++ w) int_spec tt (List.length prefix) n
+    tt (List.length prefix + List.length w - List.length rest).
+Proof.
+  unfold parse_int, int_spec.
+  intros Hparse.
+  destruct w as [| c w']; [discriminate |].
+  destruct (is_digit c) eqn:Ed; [| discriminate].
+  destruct (take_digits w') as [ds rest'] eqn:Eds.
+  injection Hparse as Hn Hrest. subst n rest.
+  apply d_map with (a := (c, ds)).
+  apply d_seq with (γ' := tt) (j := S (List.length prefix)).
+  - apply d_tok; [ exact (nth_error_app_cons c prefix w') | exact Ed ].
+  - replace (prefix ++ c :: w') with ((prefix ++ [c]) ++ w') by (rewrite <- app_assoc; simpl; reflexivity).
+    replace (List.length prefix + List.length (c :: w') - List.length rest') with (List.length (prefix ++ [c]) + List.length ds) by (rewrite (take_digits_shape w' ds rest' Eds); simpl; rewrite !length_app; simpl; lia).
+    replace (S (List.length prefix)) with (List.length (prefix ++ [c])) by (rewrite length_app; simpl; lia).
+    pose proof (take_digits_sound (prefix ++ [c]) w') as Hdig.
+    rewrite Eds in Hdig. simpl in Hdig. apply Hdig.
+Qed.
+
+(* ------------------------------------------------------------------------- *)
+(* Identifiers (key segments)                                                 *)
+(* ------------------------------------------------------------------------- *)
+
+Lemma take_ident_sound (prefix w : list ascii) :
+  denote surface_grammar (prefix ++ w) (Many (Tok (fun c => is_ident_char c = true)))
+    tt (List.length prefix) (fst (take_ident w)) tt (List.length prefix + List.length (fst (take_ident w))).
+Proof.
+  revert prefix. induction w as [| c w' IH]; intros prefix; simpl.
+  - rewrite Nat.add_0_r. apply d_many_nil.
+  - destruct (is_ident_char c) eqn:Ei.
+    + destruct (take_ident w') as [ds rest'] eqn:Eds; simpl in *.
+      apply d_many_cons with (γ' := tt) (j := S (List.length prefix)).
+      * apply d_tok; [ exact (nth_error_app_cons c prefix w') | exact Ei ].
+      * replace (prefix ++ c :: w') with ((prefix ++ [c]) ++ w') by (rewrite <- app_assoc; simpl; reflexivity).
+        replace (S (List.length prefix)) with (List.length (prefix ++ [c])) by (rewrite length_app; simpl; lia).
+        replace (List.length prefix + S (List.length ds)) with (List.length (prefix ++ [c]) + List.length ds) by (rewrite length_app; simpl; lia).
+        apply (IH (prefix ++ [c])).
+    + rewrite Nat.add_0_r. apply d_many_nil.
+Qed.
+
+Lemma take_ident_shape (w ds rest : list ascii) :
+  take_ident w = (ds, rest) -> w = ds ++ rest.
+Proof.
+  revert ds rest.
+  induction w as [| c w' IH]; intros ds rest Htake; simpl in Htake.
+  - injection Htake as Hds Hrest. subst ds rest. reflexivity.
+  - destruct (is_ident_char c) eqn:Ei.
+    + destruct (take_ident w') as [ds' rest'] eqn:Erec.
+      injection Htake as Hds Hrest. subst ds rest.
+      simpl. f_equal. apply (IH ds' rest' eq_refl).
+    + injection Htake as Hds Hrest. subst ds rest. reflexivity.
+Qed.
+
+Lemma parse_ident_sound (prefix w : list ascii) (s : seg) (rest : list ascii) :
+  parse_ident w = Some (s, rest) ->
+  denote surface_grammar (prefix ++ w) ident_spec tt (List.length prefix) s
+    tt (List.length prefix + List.length w - List.length rest).
+Proof.
+  unfold parse_ident, ident_spec.
+  intros Hparse.
+  destruct w as [| c w']; [discriminate |].
+  destruct (is_ident_char c) eqn:Ei; [| discriminate].
+  destruct (take_ident w') as [ds rest'] eqn:Eds.
+  injection Hparse as Hs Hrest. subst s rest.
+  apply d_map with (a := (c, ds)).
+  apply d_seq with (γ' := tt) (j := S (List.length prefix)).
+  - apply d_tok; [ exact (nth_error_app_cons c prefix w') | exact Ei ].
+  - replace (prefix ++ c :: w') with ((prefix ++ [c]) ++ w') by (rewrite <- app_assoc; simpl; reflexivity).
+    replace (List.length prefix + List.length (c :: w') - List.length rest') with (List.length (prefix ++ [c]) + List.length ds) by (rewrite (take_ident_shape w' ds rest' Eds); simpl; rewrite !length_app; simpl; lia).
+    replace (S (List.length prefix)) with (List.length (prefix ++ [c])) by (rewrite length_app; simpl; lia).
+    pose proof (take_ident_sound (prefix ++ [c]) w') as Hid.
+    rewrite Eds in Hid. simpl in Hid. apply Hid.
+Qed.
+
+(* ------------------------------------------------------------------------- *)
+(* Keys (dotted identifiers)                                                  *)
+(* ------------------------------------------------------------------------- *)
+
+Lemma parse_ident_shape (w s rest : list ascii) :
+  parse_ident w = Some (s, rest) -> w = s ++ rest.
+Proof.
+  intros H. unfold parse_ident in H.
+  destruct w as [| c w']; [discriminate |].
+  destruct (is_ident_char c) eqn:Ei; [| discriminate].
+  destruct (take_ident w') as [ds rest'] eqn:Eds.
+  injection H as Hs Hrest. subst s rest.
+  simpl. f_equal. apply (take_ident_shape w' ds rest' Eds).
+Qed.
+
+(* The dotted-tail of a key: `parse_key fuel w` reading `ks` corresponds to
+   `Many (· "." ident)` reading `.w`, consuming the leading dot each round. *)
+Ltac pos := repeat rewrite length_app; simpl; lia.
+
+Lemma parse_key_many_sound : forall fuel prefix w ks rest,
+  parse_key fuel w = Some (ks, rest) ->
+  denote surface_grammar (prefix ++ "."%char :: w)
+    (Many (Map (fun p : unit * seg => snd p) (Seq (ch "."%char) ident_spec)))
+    tt (List.length prefix) ks tt (List.length prefix + S (List.length w) - List.length rest).
+Proof.
+  induction fuel as [| fuel' IH]; intros prefix w ks rest Hparse.
+  - simpl in Hparse. discriminate.
+  - simpl in Hparse.
+    destruct (parse_ident w) as [[s rest0] |] eqn:Eid; [| discriminate].
+    destruct rest0 as [| c rest'] eqn:Er.
+    + (* key = [s], rest = [] *)
+      injection Hparse as Hk Hrest. subst ks rest.
+      replace (List.length prefix + S (List.length w) - List.length (@nil ascii)) with (S (List.length prefix) + List.length w) by pos.
+      apply d_many_cons with (γ' := tt) (j := S (List.length prefix) + List.length w).
+      * apply d_map with (a := (tt, s)).
+        apply d_seq with (γ' := tt) (j := S (List.length prefix)).
+        -- apply (ch_sound "."%char prefix w).
+        -- replace (prefix ++ "."%char :: w) with ((prefix ++ ["."%char]) ++ w) by (rewrite <- app_assoc; simpl; reflexivity).
+           replace (S (List.length prefix) + List.length w) with (List.length (prefix ++ ["."%char]) + List.length w - 0) by pos.
+           replace (S (List.length prefix)) with (List.length (prefix ++ ["."%char])) by pos.
+           apply (parse_ident_sound (prefix ++ ["."%char]) w s [] Eid).
+      * apply d_many_nil.
+    + destruct (Ascii.eqb c "."%char) eqn:Edot.
+      * apply (Ascii.eqb_eq c "."%char) in Edot. subst c.
+        destruct (parse_key fuel' rest') as [[ks' rest''] |] eqn:Ek; [| discriminate].
+        injection Hparse as Hk Hrest. subst ks rest.
+        replace (List.length prefix + S (List.length w) - List.length rest'') with (List.length (prefix ++ ["."%char] ++ s) + S (List.length rest') - List.length rest'') by (rewrite (parse_ident_shape w s ("."%char :: rest') Eid); pos).
+        apply d_many_cons with (γ' := tt) (j := List.length (prefix ++ ["."%char] ++ s)).
+        -- apply d_map with (a := (tt, s)).
+           apply d_seq with (γ' := tt) (j := S (List.length prefix)).
+           ++ apply (ch_sound "."%char prefix w).
+           ++ replace (prefix ++ "."%char :: w) with ((prefix ++ ["."%char]) ++ w) by (rewrite <- app_assoc; simpl; reflexivity).
+              replace (S (List.length prefix)) with (List.length (prefix ++ ["."%char])) by pos.
+              replace (List.length (prefix ++ ["."%char] ++ s)) with (List.length (prefix ++ ["."%char]) + List.length w - List.length ("."%char :: rest')) by (rewrite (parse_ident_shape w s ("."%char :: rest') Eid); pos).
+              apply (parse_ident_sound (prefix ++ ["."%char]) w s ("."%char :: rest') Eid).
+        -- replace (prefix ++ "."%char :: w) with ((prefix ++ ["."%char] ++ s) ++ "."%char :: rest')
+             by (rewrite (parse_ident_shape w s ("."%char :: rest') Eid); simpl; rewrite <- !app_assoc; simpl; reflexivity).
+           apply (IH (prefix ++ ["."%char] ++ s) rest' ks' rest'' Ek).
+      * injection Hparse as Hk Hrest. subst ks rest.
+        replace (List.length prefix + S (List.length w) - List.length (c :: rest')) with (S (List.length prefix) + List.length s) by (rewrite (parse_ident_shape w s (c :: rest') Eid); pos).
+        apply d_many_cons with (γ' := tt) (j := S (List.length prefix) + List.length s).
+        -- apply d_map with (a := (tt, s)).
+           apply d_seq with (γ' := tt) (j := S (List.length prefix)).
+           ++ apply (ch_sound "."%char prefix w).
+           ++ replace (prefix ++ "."%char :: w) with ((prefix ++ ["."%char]) ++ w) by (rewrite <- app_assoc; simpl; reflexivity).
+              replace (S (List.length prefix) + List.length s) with (List.length (prefix ++ ["."%char]) + List.length w - List.length (c :: rest')) by (rewrite (parse_ident_shape w s (c :: rest') Eid); pos).
+              replace (S (List.length prefix)) with (List.length (prefix ++ ["."%char])) by pos.
+              apply (parse_ident_sound (prefix ++ ["."%char]) w s (c :: rest') Eid).
+        -- apply d_many_nil.
+Qed.
+
+Lemma parse_key_sound (fuel : nat) (prefix w : list ascii) (k : key) (rest : list ascii) :
+  parse_key fuel w = Some (k, rest) ->
+  denote surface_grammar (prefix ++ w) key_spec tt (List.length prefix) k
+    tt (List.length prefix + List.length w - List.length rest).
+Proof.
+  unfold key_spec.
+  induction fuel as [| fuel' IH]; intros Hparse.
+  - simpl in Hparse. discriminate.
+  - simpl in Hparse.
+    destruct (parse_ident w) as [[s rest0] |] eqn:Eid; [| discriminate].
+    destruct rest0 as [| c rest'] eqn:Er.
+    + (* key = [s], rest = [] *)
+      injection Hparse as Hk Hrest. subst k rest.
+      replace (List.length prefix + List.length w - List.length (@nil ascii)) with (List.length prefix + List.length w) by pos.
+      apply d_map with (a := (s, @nil seg)).
+      apply d_seq with (γ' := tt) (j := List.length prefix + List.length w).
+      * replace (List.length prefix + List.length w) with (List.length prefix + List.length w - 0) by pos.
+        apply (parse_ident_sound prefix w s [] Eid).
+      * apply d_many_nil.
+    + destruct (Ascii.eqb c "."%char) eqn:Edot.
+      * apply (Ascii.eqb_eq c "."%char) in Edot. subst c.
+        destruct (parse_key fuel' rest') as [[ks' rest''] |] eqn:Ek; [| discriminate].
+        injection Hparse as Hk Hrest. subst k rest.
+        replace (List.length prefix + List.length w - List.length rest'') with (List.length (prefix ++ s) + S (List.length rest') - List.length rest'') by (rewrite (parse_ident_shape w s ("."%char :: rest') Eid); pos).
+        apply d_map with (a := (s, ks')).
+        apply d_seq with (γ' := tt) (j := List.length (prefix ++ s)).
+        -- replace (List.length (prefix ++ s)) with (List.length prefix + List.length w - List.length ("."%char :: rest')) by (rewrite (parse_ident_shape w s ("."%char :: rest') Eid); pos).
+           apply (parse_ident_sound prefix w s ("."%char :: rest') Eid).
+        -- replace (prefix ++ w) with ((prefix ++ s) ++ "."%char :: rest')
+             by (rewrite (parse_ident_shape w s ("."%char :: rest') Eid); rewrite app_assoc; reflexivity).
+           apply (parse_key_many_sound fuel' (prefix ++ s) rest' ks' rest'' Ek).
+      * injection Hparse as Hk Hrest. subst k rest.
+        replace (List.length prefix + List.length w - List.length (c :: rest')) with (List.length prefix + List.length s) by (rewrite (parse_ident_shape w s (c :: rest') Eid); pos).
+        apply d_map with (a := (s, @nil seg)).
+        apply d_seq with (γ' := tt) (j := List.length prefix + List.length s).
+        -- replace (List.length prefix + List.length s) with (List.length prefix + List.length w - List.length (c :: rest')) by (rewrite (parse_ident_shape w s (c :: rest') Eid); pos).
+           apply (parse_ident_sound prefix w s (c :: rest') Eid).
+        -- apply d_many_nil.
+Qed.
+
