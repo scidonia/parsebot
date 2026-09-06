@@ -532,14 +532,13 @@ Definition parse_stmt (fuel : nat) (w : list ascii) : option (stmt * list ascii)
 
 (* parse-then-validate: surface-parse, then run the state machine *)
 Fixpoint parse_doc (fuel : nat) (w : list ascii) : option Document :=
-  let w' := skip_ws w in
-  match w' with
+  match skip_ws w with
   | [] => Some []
   | _ =>
       match fuel with
       | O => None
       | S fuel' =>
-          match parse_stmt fuel' w' with
+          match parse_stmt fuel' (skip_ws w) with
           | None => None
           | Some (s, rest) =>
               match parse_doc fuel' rest with
@@ -1212,3 +1211,126 @@ Proof.
              (parse_doc_many_sound fuel (ws_part w) w doc Hparse) w (ws_part_skip w)).
 Qed.
 
+
+(* ------------------------------------------------------------------------- *)
+(* Direct state-indexed parsing: interleave surface parsing with the state   *)
+(* machine, producing a Namespace in a single pass (RP §6.5 "directParse").   *)
+(* ------------------------------------------------------------------------- *)
+
+Fixpoint direct_parse (fuel : nat) (ns : Namespace) (w : list ascii) : option Namespace :=
+  match skip_ws w with
+  | [] => Some ns
+  | _ =>
+      match fuel with
+      | O => None
+      | S fuel' =>
+          match parse_stmt fuel' (skip_ws w) with
+          | None => None
+          | Some (s, rest) =>
+              match step ns s with
+              | None => None
+              | Some ns' => direct_parse fuel' ns' rest
+              end
+          end
+      end
+  end.
+
+(* direct_parse is equivalent to parse-then-validate: parsing a document and
+   folding the transition is the same as stepping while parsing. *)
+Lemma parse_doc_O (w : list ascii) :
+  parse_doc 0 w = match skip_ws w with [] => Some [] | _ => None end.
+Proof. reflexivity. Qed.
+
+Lemma parse_doc_S (fuel : nat) (w : list ascii) :
+  parse_doc (S fuel) w =
+  match skip_ws w with
+  | [] => Some []
+  | _ => match parse_stmt fuel (skip_ws w) with
+         | None => None
+         | Some (s, rest) => match parse_doc fuel rest with None => None | Some ss => Some (s :: ss) end
+         end
+  end.
+Proof. reflexivity. Qed.
+
+Lemma run_O (ns : Namespace) : run ns [] = Some ns.
+Proof. reflexivity. Qed.
+
+Lemma direct_parse_O (ns : Namespace) (w : list ascii) :
+  direct_parse 0 ns w = match skip_ws w with [] => Some ns | _ => None end.
+Proof. reflexivity. Qed.
+
+Lemma direct_parse_S (fuel : nat) (ns : Namespace) (w : list ascii) :
+  direct_parse (S fuel) ns w =
+  match skip_ws w with
+  | [] => Some ns
+  | _ => match parse_stmt fuel (skip_ws w) with
+         | None => None
+         | Some (s, rest) => match step ns s with None => None | Some ns' => direct_parse fuel ns' rest end
+         end
+  end.
+Proof. reflexivity. Qed.
+
+Lemma direct_parse_to_run : forall fuel ns w ns',
+  direct_parse fuel ns w = Some ns' ->
+  exists doc, parse_doc fuel w = Some doc /\ run ns doc = Some ns'.
+Proof.
+  induction fuel as [| fuel' IH]; intros ns w ns' H.
+  - rewrite direct_parse_O in H.
+    destruct (skip_ws w) as [| c w'] eqn:Ew; [| discriminate].
+    injection H as Hn. subst ns'. exists [].
+    rewrite parse_doc_O. rewrite Ew. simpl. auto.
+  - rewrite direct_parse_S in H.
+    destruct (skip_ws w) as [| c w'] eqn:Ew.
+    + injection H as Hn. subst ns'. exists [].
+      rewrite parse_doc_S. rewrite Ew. simpl. auto.
+    + destruct (parse_stmt fuel' (c :: w')) as [[s rest] |] eqn:Es; [| discriminate].
+      destruct (step ns s) as [ns1 |] eqn:Estep; [| discriminate].
+      apply (IH ns1 rest ns') in H. destruct H as [doc [Hp Hr]].
+      exists (s :: doc). split.
+      * rewrite parse_doc_S. rewrite Ew. simpl. rewrite Es. rewrite Hp. reflexivity.
+      * simpl. rewrite Estep. exact Hr.
+Qed.
+
+Lemma run_to_direct_parse : forall fuel ns w ns',
+  (exists doc, parse_doc fuel w = Some doc /\ run ns doc = Some ns') ->
+  direct_parse fuel ns w = Some ns'.
+Proof.
+  induction fuel as [| fuel' IH]; intros ns w ns' [doc [Hp Hr]].
+  - rewrite parse_doc_O in Hp.
+    destruct (skip_ws w) as [| c w'] eqn:Ew; [| discriminate].
+    injection Hp as Hd. subst doc. simpl in Hr.
+    injection Hr as Hn. subst ns'. rewrite direct_parse_O. simpl. rewrite Ew. reflexivity.
+  - rewrite parse_doc_S in Hp.
+    destruct (skip_ws w) as [| c w'] eqn:Ew.
+    + injection Hp as Hd. subst doc. simpl in Hr.
+      injection Hr as Hn. subst ns'. rewrite direct_parse_S. simpl. rewrite Ew. reflexivity.
+    + destruct (parse_stmt fuel' (c :: w')) as [[s rest] |] eqn:Es; [| discriminate].
+      destruct (parse_doc fuel' rest) as [doc' |] eqn:Ed; [| discriminate].
+      injection Hp as Hd. subst doc. simpl in Hr.
+      destruct (step ns s) as [ns1 |] eqn:Estep; [| discriminate].
+      rewrite direct_parse_S. simpl. rewrite Ew. rewrite Es. rewrite Estep.
+      apply (IH ns1 rest ns'). exists doc'. split; [exact Ed | exact Hr].
+Qed.
+
+Lemma direct_parse_equiv : forall fuel ns w ns',
+  direct_parse fuel ns w = Some ns' <->
+  (exists doc, parse_doc fuel w = Some doc /\ run ns doc = Some ns').
+Proof.
+  intros fuel ns w ns'. split.
+  - apply direct_parse_to_run.
+  - apply run_to_direct_parse.
+Qed.
+Lemma parse_then_validate_iff_direct : forall w ns,
+  parse_then_validate w = Some ns <-> direct_parse (S (2 * List.length w)) [] w = Some ns.
+Proof.
+  intros w ns. unfold parse_then_validate.
+  split; intros H.
+  - destruct (parse_doc (S (2 * List.length w)) w) as [doc |] eqn:E; [| discriminate].
+    simpl in H. destruct (run [] doc) as [n |] eqn:Er; [| discriminate].
+    injection H as Hn. subst n.
+    apply (direct_parse_equiv (S (2 * List.length w)) [] w ns).
+    exists doc. split; [exact E | exact Er].
+  - apply (direct_parse_equiv (S (2 * List.length w)) [] w ns) in H.
+    destruct H as [doc [Hp Hr]].
+    rewrite Hp. simpl. rewrite Hr. reflexivity.
+Qed.
