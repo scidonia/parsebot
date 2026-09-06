@@ -2719,3 +2719,533 @@ Proof.
         rewrite (IH fuel'' (c2 :: rest0) d' ltac:(lia) Ed). reflexivity.
 Qed.
 
+(* ------------------------------------------------------------------------- *)
+(* Document completeness                                                      *)
+(* ------------------------------------------------------------------------- *)
+Lemma is_ws_digit : forall c, is_ws c = true -> is_digit c = false.
+Proof.
+  intros c Hws. apply not_true_is_false. intro Hd.
+  pose proof (is_digit_ws c Hd) as Hw'. rewrite Hws in Hw'. discriminate.
+Qed.
+
+Lemma is_ident_char_not_ws : forall c, is_ident_char c = true -> is_ws c = false.
+Proof.
+  intros c Hic. apply not_true_is_false. intro Hws.
+  pose proof (is_ws_ident c Hws) as Hic'. rewrite Hic in Hic'. discriminate.
+Qed.
+
+Lemma is_ws_bracket : is_ws "["%char = false.
+Proof. unfold is_ws. simpl. reflexivity. Qed.
+
+Lemma parse_ident_nonempty : forall w s rest, parse_ident w = Some (s, rest) -> s <> [].
+Proof.
+  intros w s rest H. unfold parse_ident in H.
+  destruct w as [| c w']; [discriminate |].
+  simpl in H.
+  destruct (is_ident_char c) eqn:E; [| discriminate].
+  destruct (take_ident w') as [ds rest'] eqn:Et.
+  injection H as Hs Hr. subst s. discriminate.
+Qed.
+
+Lemma parse_key_leq_fuel : forall fuel w k r,
+  parse_key fuel w = Some (k, r) -> List.length k <= fuel.
+Proof.
+  induction fuel as [| fuel' IH]; intros w k r H.
+  - rewrite parse_key_O in H. discriminate.
+  - rewrite parse_key_S in H.
+    destruct (parse_ident w) as [[s rest0] |] eqn:Eid; [| discriminate].
+    destruct rest0 as [| c rest1] eqn:Er.
+    + injection H as Hk Hr. subst k r. simpl. lia.
+    + destruct (Ascii.eqb c "."%char) eqn:Edot.
+      * destruct (parse_key fuel' rest1) as [[ks rest2] |] eqn:Ek; [| congruence].
+        injection H as Hk Hr. subst k r. simpl.
+        apply (le_n_S _ _ (IH rest1 ks rest2 Ek)).
+      * injection H as Hk Hr. subst k r. simpl. lia.
+Qed.
+
+Lemma parse_key_seg_le : forall fuel w k r,
+  parse_key fuel w = Some (k, r) -> List.length k <= List.length w - List.length r.
+Proof.
+  induction fuel as [| fuel' IH]; intros w k r H.
+  - rewrite parse_key_O in H. discriminate.
+  - rewrite parse_key_S in H.
+    destruct (parse_ident w) as [[s rest0] |] eqn:Eid; [| discriminate].
+    destruct rest0 as [| c rest1] eqn:Er.
+    + injection H as Hk Hr. subst k r. simpl.
+      rewrite (parse_ident_shape w s [] Eid). rewrite app_nil_r. simpl.
+      pose proof (parse_ident_nonempty w s [] Eid) as Hs.
+      destruct s as [| sc st]; [exfalso; apply Hs; reflexivity | simpl; lia].
+    + destruct (Ascii.eqb c "."%char) eqn:Edot.
+      * apply Ascii.eqb_eq in Edot. subst c.
+        destruct (parse_key fuel' rest1) as [[ks rest2] |] eqn:Ek; [| congruence].
+        injection H as Hk Hr. subst k r.
+        rewrite (parse_ident_shape w s ("."%char :: rest1) Eid).
+        rewrite length_app. cbn [List.length].
+        pose proof (parse_ident_nonempty w s ("."%char :: rest1) Eid) as Hs.
+        pose proof (IH rest1 ks rest2 Ek) as Hks.
+        pose proof (parse_key_shape fuel' rest1 ks rest2 Ek) as [kpre Hkpre].
+        destruct s as [| sc st]; [exfalso; apply Hs; reflexivity |].
+        cbn [List.length].
+        assert (Hrest : List.length rest2 <= List.length rest1).
+        { rewrite <- Hkpre. rewrite length_app. lia. }
+        lia.
+      * injection H as Hk Hr. subst k r.
+        rewrite (parse_ident_shape w s (c :: rest1) Eid).
+        rewrite length_app. cbn [List.length].
+        pose proof (parse_ident_nonempty w s (c :: rest1) Eid) as Hs.
+        destruct s as [| sc st]; [exfalso; apply Hs; reflexivity |].
+        cbn [List.length]. lia.
+Qed.
+
+Lemma parse_stmt_fuel_red : forall w s r,
+  parse_stmt (List.length w) w = Some (s, r) ->
+  parse_stmt (List.length w - 1) w = Some (s, r).
+Proof.
+  intros w s r H.
+  destruct w as [| c rest]; [unfold parse_stmt in H; discriminate |].
+  simpl in H |- *.
+  destruct rest as [| c2 rest'].
+  { (* w = [c] *)
+    exfalso. simpl in H.
+    destruct (Ascii.eqb c "["%char) eqn:Eb;
+      [ simpl in H; discriminate
+      | rewrite parse_key_O in H; simpl in H; discriminate ].
+  }
+  simpl in H |- *.
+  destruct (Ascii.eqb c "["%char) eqn:Eb.
+  { (* bracket: [ ... ] *)
+    destruct (Ascii.eqb c2 "["%char) eqn:Eb2; simpl in H |- *.
+    - (* array [[k]] *)
+      destruct (parse_key (S (List.length rest')) rest') as [[k r0] |] eqn:Ek; [| discriminate].
+      simpl in H.
+      destruct r0 as [| r1 r']; [discriminate |].
+      simpl in H.
+      destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
+      destruct r' as [| r2 r'']; [discriminate |].
+      simpl in H.
+      destruct (Ascii.eqb r2 "]"%char) eqn:Er2; [| discriminate].
+      assert (Hbound : List.length k <= List.length rest').
+      { pose proof (parse_key_seg_le (S (List.length rest')) rest' k (r1 :: r2 :: r'') Ek) as Hk.
+        simpl in Hk. lia. }
+      rewrite (parse_key_fuel_red (List.length rest') rest' k (r1 :: r2 :: r'') Ek Hbound).
+      simpl. rewrite Er1. simpl. rewrite Er2. simpl.
+      injection H as Hsr Hr; subst; reflexivity.
+    - (* table [k] *)
+      destruct (parse_key (S (List.length rest')) (c2 :: rest')) as [[k r0] |] eqn:Ek; [| discriminate].
+      simpl in H.
+      destruct r0 as [| r1 r'']; [discriminate |].
+      simpl in H.
+      destruct (Ascii.eqb r1 "]"%char) eqn:Er1; [| discriminate].
+      assert (Hbound : List.length k <= List.length rest').
+      { pose proof (parse_key_seg_le (S (List.length rest')) (c2 :: rest') k (r1 :: r'') Ek) as Hk.
+        simpl in Hk. lia. }
+      rewrite (parse_key_fuel_red (List.length rest') (c2 :: rest') k (r1 :: r'') Ek Hbound).
+      simpl. rewrite Er1. simpl.
+      injection H as Hsr Hr; subst; reflexivity.
+  }
+  { (* kv k = v *)
+    destruct (parse_key (S (List.length rest')) (c :: c2 :: rest')) as [[k rest1] |] eqn:Ek; [| discriminate].
+    simpl in H.
+    destruct (skip_ws rest1) as [| e rest2] eqn:Esk; [discriminate |].
+    simpl in H.
+    destruct (Ascii.eqb e "="%char) eqn:Eeq; [| discriminate].
+    destruct (parse_int (skip_ws rest2)) as [[v rest3] |] eqn:Ei; [| discriminate].
+    assert (Hbound : List.length k <= List.length rest').
+    { pose proof (parse_key_seg_le (S (List.length rest')) (c :: c2 :: rest') k rest1 Ek) as Hk.
+      assert (Hr1 : List.length rest1 >= 2).
+      { pose proof (ws_part_skip rest1) as Hwps. rewrite <- Hwps. rewrite length_app.
+        rewrite Esk. simpl.
+        pose proof (parse_int_last_digit (skip_ws rest2) v rest3 Ei) as [ipre [d [Hip _]]].
+        pose proof (f_equal (@List.length ascii) Hip) as Hlen.
+        rewrite length_app in Hlen. simpl in Hlen.
+        pose proof (skip_ws_le rest2) as Hskle.
+        lia. }
+      cbn [List.length] in Hk. lia. }
+    rewrite (parse_key_fuel_red (List.length rest') (c :: c2 :: rest') k rest1 Ek Hbound).
+    simpl. rewrite Esk. simpl. rewrite Eeq. simpl. rewrite Ei. simpl.
+    injection H as Hsr Hr; subst; reflexivity.
+  }
+Qed.
+
+
+Lemma ws_many_nth_all_ws (prefix w : list ascii) (i j : nat) (u : list unit) :
+  denote surface_grammar (prefix ++ w) (Many (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true)))) tt i u tt j ->
+  forall k c, i <= k < j -> nth_error (prefix ++ w) k = Some c -> is_ws c = true.
+Proof.
+  revert prefix w i j. induction u as [| h u' IH]; intros prefix w i j Hd k c Hk Hnth.
+  - apply (fst (denote_many_iff ascii unit tom_nt surface_grammar (prefix ++ w) unit
+      (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true))) tt tt i j (@nil unit))) in Hd.
+    destruct Hd as [Hnil | Hcons]; [| destruct Hcons as [a [as' [γ'' [k0 [[E _] _]]]]]; discriminate].
+    destruct Hnil as [[_ Eg] Ej]. subst. lia.
+  - apply (fst (denote_many_iff ascii unit tom_nt surface_grammar (prefix ++ w) unit
+      (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true))) tt tt i j (h :: u'))) in Hd.
+    destruct Hd as [Hnil | Hcons]; [destruct Hnil as [[E _] _]; discriminate |].
+    destruct Hcons as [a [as' [γ'' [k0 [[E Hone] Htail]]]]]. injection E as Ea Eas'. subst a as'.
+    apply (fst (denote_map_iff ascii unit tom_nt surface_grammar (prefix ++ w) ascii unit
+      (fun _ : ascii => tt) (Tok (fun c => is_ws c = true)) tt γ'' i k0 h)) in Hone.
+    destruct Hone as [d [Ed Htok]].
+    apply (fst (denote_tok_iff ascii unit tom_nt surface_grammar (prefix ++ w) (fun c => is_ws c = true) d tt γ'' i k0)) in Htok.
+    destruct Htok as [[[Eg Ek0] Hnth'] HP]. subst γ''. subst k0.
+    destruct (Nat.lt_ge_cases k (S i)) as [Hlt | Hge].
+    + assert (Hki : k = i) by lia. subst k.
+      rewrite Hnth' in Hnth. injection Hnth as Hc. subst c. exact HP.
+    + exact (IH prefix w (S i) j Htail k c ltac:(lia) Hnth).
+Qed.
+
+Lemma ws_spec_nth_all_ws : forall prefix w i j,
+  denote surface_grammar (prefix ++ w) ws_spec tt i tt tt j ->
+  forall k c, i <= k < j -> nth_error (prefix ++ w) k = Some c -> is_ws c = true.
+Proof.
+  intros prefix w i j Hd k c Hk Hnth. unfold ws_spec in Hd.
+  apply (fst (denote_map_iff ascii unit tom_nt surface_grammar (prefix ++ w) (list unit) unit
+    (fun _ : list unit => tt) (Many (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true)))) tt tt i j tt)) in Hd.
+  destruct Hd as [u [_ Hmany]].
+  exact (ws_many_nth_all_ws prefix w i j u Hmany k c Hk Hnth).
+Qed.
+
+Lemma stmt_head_nonws : forall w i j s,
+  denote surface_grammar w stmt_spec tt i s tt j ->
+  forall c, nth_error w i = Some c -> is_ws c = false.
+Proof.
+  intros w i j s Hd c Hc. unfold stmt_spec in Hd.
+  apply (fst (denote_alt_iff ascii unit tom_nt surface_grammar w stmt kv_spec (Alt table_spec array_spec) tt tt i j s)) in Hd.
+  destruct Hd as [Hkv | Hta].
+  - (* kv *)
+    unfold kv_spec in Hkv.
+    apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar w key stmt key_spec (fun k0 : key => Bind ws_spec (fun _ : unit => Bind (ch "="%char) (fun _ : unit => Bind ws_spec (fun _ : unit => Map (fun v : nat => SKV k0 v) int_spec)))) tt tt i j s)) in Hkv.
+    destruct Hkv as [γ1 [k1 [k [Hkey Hbody]]]]. destruct γ1.
+    unfold key_spec in Hkey.
+    apply (fst (denote_map_iff ascii unit tom_nt surface_grammar w (seg * list seg) key
+      (fun p : seg * list seg => fst p :: snd p) (Seq ident_spec (Many (Map (fun p : unit * seg => snd p) (Seq (ch "."%char) ident_spec)))) tt tt i k1 k)) in Hkey.
+    destruct Hkey as [p [Ek Hseq]].
+    apply (fst (denote_seq_iff ascii unit tom_nt surface_grammar w seg (list seg) ident_spec (Many (Map (fun p : unit * seg => snd p) (Seq (ch "."%char) ident_spec))) tt tt i k1 p)) in Hseq.
+    destruct Hseq as [γ2 [k2 [s1 [ks [[Ep Hid] Htail]]]]]. destruct γ2.
+    unfold ident_spec in Hid.
+    apply (fst (denote_map_iff ascii unit tom_nt surface_grammar w (ascii * list ascii) seg
+      (fun p : ascii * list ascii => fst p :: snd p) (Seq (Tok (fun c => is_ident_char c = true)) (Many (Tok (fun c => is_ident_char c = true)))) tt tt i k2 s1)) in Hid.
+    destruct Hid as [q [Es Hseq2]].
+    apply (fst (denote_seq_iff ascii unit tom_nt surface_grammar w ascii (list ascii) (Tok (fun c => is_ident_char c = true)) (Many (Tok (fun c => is_ident_char c = true))) tt tt i k2 q)) in Hseq2.
+    destruct Hseq2 as [γ3 [k3 [c0 [ds [[Eq Htok] Hm]]]]]. destruct γ3.
+    apply (fst (denote_tok_iff ascii unit tom_nt surface_grammar w (fun c => is_ident_char c = true) c0 tt tt i k3)) in Htok.
+    destruct Htok as [[[Eg Ek3] Hnth] HP].
+    rewrite Hnth in Hc. injection Hc as Hc'. subst c. apply (is_ident_char_not_ws c0 HP).
+  - (* table / array *)
+    apply (fst (denote_alt_iff ascii unit tom_nt surface_grammar w stmt table_spec array_spec tt tt i j s)) in Hta.
+    destruct Hta as [Ht | Ha].
+    + unfold table_spec in Ht.
+      apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar w unit stmt (ch "["%char) (fun _ : unit => Bind key_spec (fun k : key => Bind (ch "]"%char) (fun _ : unit => Pure (STable k)))) tt tt i j s)) in Ht.
+      destruct Ht as [γ1 [k1 [u [Hb Hbody]]]]. destruct u. destruct γ1.
+      pose proof (ch_nth "["%char w i k1 Hb) as [Hnth Ej1].
+      rewrite Hnth in Hc. injection Hc as Hc'. subst c. apply is_ws_bracket.
+    + unfold array_spec in Ha.
+      apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar w unit stmt (ch "["%char) (fun _ : unit => Bind (ch "["%char) (fun _ : unit => Bind key_spec (fun k : key => Bind (ch "]"%char) (fun _ : unit => Bind (ch "]"%char) (fun _ : unit => Pure (SArray k)))))) tt tt i j s)) in Ha.
+      destruct Ha as [γ1 [k1 [u [Hb Hbody]]]]. destruct u. destruct γ1.
+      pose proof (ch_nth "["%char w i k1 Hb) as [Hnth Ej1].
+      rewrite Hnth in Hc. injection Hc as Hc'. subst c. apply is_ws_bracket.
+Qed.
+
+Lemma ws1_to_ws : forall prefix w i j,
+  denote surface_grammar (prefix ++ w) ws1_spec tt i tt tt j ->
+  denote surface_grammar (prefix ++ w) ws_spec tt i tt tt j.
+Proof.
+  intros prefix w i j Hd. unfold ws1_spec, ws_spec in Hd |- *.
+  apply (fst (denote_map_iff ascii unit tom_nt surface_grammar (prefix ++ w) (unit * list unit) unit
+    (fun _ : unit * list unit => tt) (Seq (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true))) (Many (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true))))) tt tt i j tt)) in Hd.
+  destruct Hd as [p [Ep Hseq]].
+  apply (fst (denote_seq_iff ascii unit tom_nt surface_grammar (prefix ++ w) unit (list unit)
+    (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true))) (Many (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true)))) tt tt i j p)) in Hseq.
+  destruct Hseq as [γ [k1 [u [l [[Ep2 Hone] Hmany]]]]]. destruct u. destruct γ.
+  apply (fst (denote_map_iff ascii unit tom_nt surface_grammar (prefix ++ w) ascii unit
+    (fun _ : ascii => tt) (Tok (fun c => is_ws c = true)) tt tt i k1 tt)) in Hone.
+  destruct Hone as [d [Ed Htok]].
+  apply d_map with (a := tt :: l).
+  apply d_many_cons with (γ' := tt) (j := k1).
+  - apply d_map with (a := d). exact Htok.
+  - exact Hmany.
+Qed.
+
+Lemma ws1_head : forall w i j,
+  denote surface_grammar w ws1_spec tt i tt tt j ->
+  exists d, nth_error w i = Some d /\ is_ws d = true.
+Proof.
+  intros w i j Hd. unfold ws1_spec in Hd.
+  apply (fst (denote_map_iff ascii unit tom_nt surface_grammar w (unit * list unit) unit
+    (fun _ : unit * list unit => tt) (Seq (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true))) (Many (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true))))) tt tt i j tt)) in Hd.
+  destruct Hd as [p [Ep Hseq]].
+  apply (fst (denote_seq_iff ascii unit tom_nt surface_grammar w unit (list unit)
+    (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true))) (Many (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true)))) tt tt i j p)) in Hseq.
+  destruct Hseq as [γ [k1 [u [l [[Ep2 Hone] Hmany]]]]]. destruct u. destruct γ.
+  apply (fst (denote_map_iff ascii unit tom_nt surface_grammar w ascii unit
+    (fun _ : ascii => tt) (Tok (fun c => is_ws c = true)) tt tt i k1 tt)) in Hone.
+  destruct Hone as [d [Ed Htok]].
+  apply (fst (denote_tok_iff ascii unit tom_nt surface_grammar w (fun c => is_ws c = true) d tt tt i k1)) in Htok.
+  destruct Htok as [[[Eg Ek1] Hnth] HP]. exists d. split; [exact Hnth | exact HP].
+Qed.
+
+Lemma stmt_head_char : forall w i s j,
+  denote surface_grammar w stmt_spec tt i s tt j ->
+  exists c, nth_error w i = Some c.
+Proof.
+  intros w i s j Hd. unfold stmt_spec in Hd.
+  apply (fst (denote_alt_iff ascii unit tom_nt surface_grammar w stmt kv_spec (Alt table_spec array_spec) tt tt i j s)) in Hd.
+  destruct Hd as [Hkv | Hta].
+  - unfold kv_spec in Hkv.
+    apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar w key stmt key_spec (fun k0 : key => Bind ws_spec (fun _ : unit => Bind (ch "="%char) (fun _ : unit => Bind ws_spec (fun _ : unit => Map (fun v : nat => SKV k0 v) int_spec)))) tt tt i j s)) in Hkv.
+    destruct Hkv as [γ1 [k1 [k [Hkey Hbody]]]]. destruct γ1.
+    unfold key_spec in Hkey.
+    apply (fst (denote_map_iff ascii unit tom_nt surface_grammar w (seg * list seg) key
+      (fun p : seg * list seg => fst p :: snd p) (Seq ident_spec (Many (Map (fun p : unit * seg => snd p) (Seq (ch "."%char) ident_spec)))) tt tt i k1 k)) in Hkey.
+    destruct Hkey as [p [Ek Hseq]].
+    apply (fst (denote_seq_iff ascii unit tom_nt surface_grammar w seg (list seg) ident_spec (Many (Map (fun p : unit * seg => snd p) (Seq (ch "."%char) ident_spec))) tt tt i k1 p)) in Hseq.
+    destruct Hseq as [γ2 [k2 [s1 [ks [[Ep Hid] Htail]]]]]. destruct γ2.
+    unfold ident_spec in Hid.
+    apply (fst (denote_map_iff ascii unit tom_nt surface_grammar w (ascii * list ascii) seg
+      (fun p : ascii * list ascii => fst p :: snd p) (Seq (Tok (fun c => is_ident_char c = true)) (Many (Tok (fun c => is_ident_char c = true)))) tt tt i k2 s1)) in Hid.
+    destruct Hid as [q [Es Hseq2]].
+    apply (fst (denote_seq_iff ascii unit tom_nt surface_grammar w ascii (list ascii) (Tok (fun c => is_ident_char c = true)) (Many (Tok (fun c => is_ident_char c = true))) tt tt i k2 q)) in Hseq2.
+    destruct Hseq2 as [γ3 [k3 [c0 [ds [[Eq Htok] Hm]]]]]. destruct γ3.
+    apply (fst (denote_tok_iff ascii unit tom_nt surface_grammar w (fun c => is_ident_char c = true) c0 tt tt i k3)) in Htok.
+    destruct Htok as [[[Eg Ek3] Hnth] HP]. exists c0. exact Hnth.
+  - apply (fst (denote_alt_iff ascii unit tom_nt surface_grammar w stmt table_spec array_spec tt tt i j s)) in Hta.
+    destruct Hta as [Ht | Ha].
+    + unfold table_spec in Ht.
+      apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar w unit stmt (ch "["%char) (fun _ : unit => Bind key_spec (fun k : key => Bind (ch "]"%char) (fun _ : unit => Pure (STable k)))) tt tt i j s)) in Ht.
+      destruct Ht as [γ1 [k1 [u [Hb Hbody]]]]. destruct u. destruct γ1.
+      pose proof (ch_nth "["%char w i k1 Hb) as [Hnth _]. exists "["%char. exact Hnth.
+    + unfold array_spec in Ha.
+      apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar w unit stmt (ch "["%char) (fun _ : unit => Bind (ch "["%char) (fun _ : unit => Bind key_spec (fun k : key => Bind (ch "]"%char) (fun _ : unit => Bind (ch "]"%char) (fun _ : unit => Pure (SArray k)))))) tt tt i j s)) in Ha.
+      destruct Ha as [γ1 [k1 [u [Hb Hbody]]]]. destruct u. destruct γ1.
+      pose proof (ch_nth "["%char w i k1 Hb) as [Hnth _]. exists "["%char. exact Hnth.
+Qed.
+
+Lemma stmt_consumes : forall w i s j,
+  denote surface_grammar w stmt_spec tt i s tt j -> S i <= j.
+Proof.
+  intros w i s j Hd. unfold stmt_spec in Hd.
+  apply (fst (denote_alt_iff ascii unit tom_nt surface_grammar w stmt kv_spec (Alt table_spec array_spec) tt tt i j s)) in Hd.
+  destruct Hd as [Hkv | Hta].
+  - unfold kv_spec in Hkv.
+    apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar w key stmt key_spec (fun k0 : key => Bind ws_spec (fun _ : unit => Bind (ch "="%char) (fun _ : unit => Bind ws_spec (fun _ : unit => Map (fun v : nat => SKV k0 v) int_spec)))) tt tt i j s)) in Hkv.
+    destruct Hkv as [γ1 [k1 [k [Hkey Hbody]]]]. destruct γ1.
+    unfold key_spec in Hkey.
+    apply (fst (denote_map_iff ascii unit tom_nt surface_grammar w (seg * list seg) key
+      (fun p : seg * list seg => fst p :: snd p) (Seq ident_spec (Many (Map (fun p : unit * seg => snd p) (Seq (ch "."%char) ident_spec)))) tt tt i k1 k)) in Hkey.
+    destruct Hkey as [p [Ek Hseq]].
+    apply (fst (denote_seq_iff ascii unit tom_nt surface_grammar w seg (list seg) ident_spec (Many (Map (fun p : unit * seg => snd p) (Seq (ch "."%char) ident_spec))) tt tt i k1 p)) in Hseq.
+    destruct Hseq as [γ2 [k2 [s1 [ks [[Ep Hid] Htail]]]]]. destruct γ2.
+    unfold ident_spec in Hid.
+    apply (fst (denote_map_iff ascii unit tom_nt surface_grammar w (ascii * list ascii) seg
+      (fun p : ascii * list ascii => fst p :: snd p) (Seq (Tok (fun c => is_ident_char c = true)) (Many (Tok (fun c => is_ident_char c = true)))) tt tt i k2 s1)) in Hid.
+    destruct Hid as [q [Es Hseq2]].
+    apply (fst (denote_seq_iff ascii unit tom_nt surface_grammar w ascii (list ascii) (Tok (fun c => is_ident_char c = true)) (Many (Tok (fun c => is_ident_char c = true))) tt tt i k2 q)) in Hseq2.
+    destruct Hseq2 as [γ3 [k3 [c0 [ds [[Eq Htok] Hm]]]]]. destruct γ3.
+    apply (fst (denote_tok_iff ascii unit tom_nt surface_grammar w (fun c => is_ident_char c = true) c0 tt tt i k3)) in Htok.
+    destruct Htok as [[[Eg Ek3] Hnth] HP]. subst k3.
+    pose proof (denote_pos_ge (list ascii) (Many (Tok (fun c => is_ident_char c = true))) ds w (S i) k2 Hm) as Hsik2.
+    pose proof (denote_pos_ge (list seg) (Many (Map (fun p : unit * seg => snd p) (Seq (ch "."%char) ident_spec))) ks w k2 k1 Htail) as Hk2k1.
+    pose proof (denote_pos_ge stmt (Bind ws_spec (fun _ : unit => Bind (ch "="%char) (fun _ : unit => Bind ws_spec (fun _ : unit => Map (fun v : nat => SKV k v) int_spec)))) s w k1 j Hbody) as Hk1j.
+    lia.
+  - apply (fst (denote_alt_iff ascii unit tom_nt surface_grammar w stmt table_spec array_spec tt tt i j s)) in Hta.
+    destruct Hta as [Ht | Ha].
+    + unfold table_spec in Ht.
+      apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar w unit stmt (ch "["%char) (fun _ : unit => Bind key_spec (fun k : key => Bind (ch "]"%char) (fun _ : unit => Pure (STable k)))) tt tt i j s)) in Ht.
+      destruct Ht as [γ1 [k1 [u [Hb Hbody]]]]. destruct u. destruct γ1.
+      pose proof (ch_nth "["%char w i k1 Hb) as [Hnth Ek1]. subst k1.
+      pose proof (denote_pos_ge stmt (Bind key_spec (fun k : key => Bind (ch "]"%char) (fun _ : unit => Pure (STable k)))) s w (S i) j Hbody) as Hle. lia.
+    + unfold array_spec in Ha.
+      apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar w unit stmt (ch "["%char) (fun _ : unit => Bind (ch "["%char) (fun _ : unit => Bind key_spec (fun k : key => Bind (ch "]"%char) (fun _ : unit => Bind (ch "]"%char) (fun _ : unit => Pure (SArray k)))))) tt tt i j s)) in Ha.
+      destruct Ha as [γ1 [k1 [u [Hb Hbody]]]]. destruct u. destruct γ1.
+      pose proof (ch_nth "["%char w i k1 Hb) as [Hnth Ek1]. subst k1.
+      pose proof (denote_pos_ge stmt (Bind (ch "["%char) (fun _ : unit => Bind key_spec (fun k : key => Bind (ch "]"%char) (fun _ : unit => Bind (ch "]"%char) (fun _ : unit => Pure (SArray k)))))) s w (S i) j Hbody) as Hle. lia.
+Qed.
+
+Lemma doc_complete_gen : forall prefix w doc,
+  denote surface_grammar (prefix ++ w) doc_spec tt (List.length prefix) doc tt (List.length (prefix ++ w)) ->
+  parse_doc (List.length w) w = Some doc.
+Proof.
+  intros prefix w doc. revert prefix w. induction doc as [| s ss IH]; intros prefix w Hd.
+  - (* doc = [] *)
+    unfold doc_spec in Hd.
+    apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar (prefix ++ w) unit Document ws_spec
+      (fun _ : unit => Bind (Alt (Pure ([] : Document)) (Map (fun p : stmt * list stmt => fst p :: snd p) (Seq stmt_spec (Many (Bind ws1_spec (fun _ => stmt_spec)))))) (fun doc : Document => Bind ws_spec (fun _ : unit => Pure doc))) tt tt (List.length prefix) (List.length (prefix ++ w)) [])) in Hd.
+    destruct Hd as [γ1 [j1 [u [Hws0 Hbody]]]]. destruct γ1. destruct u.
+    apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar (prefix ++ w) Document Document
+      (Alt (Pure ([] : Document)) (Map (fun p : stmt * list stmt => fst p :: snd p) (Seq stmt_spec (Many (Bind ws1_spec (fun _ => stmt_spec))))))
+      (fun doc : Document => Bind ws_spec (fun _ : unit => Pure doc)) tt tt j1 (List.length (prefix ++ w)) [])) in Hbody.
+    destruct Hbody as [γ2 [j2 [doc0 [Halt Htrail']]]]. destruct γ2.
+    apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar (prefix ++ w) unit Document ws_spec
+      (fun _ : unit => Pure doc0) tt tt j2 (List.length (prefix ++ w)) [])) in Htrail'.
+    destruct Htrail' as [γ3 [j3 [u2 [Hws3 Hpure]]]]. destruct γ3. destruct u2.
+    apply (fst (denote_pure_iff ascii unit tom_nt surface_grammar (prefix ++ w) Document doc0 tt j3 [] tt (List.length (prefix ++ w)))) in Hpure.
+    destruct Hpure as [[Edoc Ett] Ej3]. subst doc0. subst j3.
+    apply (fst (denote_alt_iff ascii unit tom_nt surface_grammar (prefix ++ w) Document
+      (Pure ([] : Document)) (Map (fun p : stmt * list stmt => fst p :: snd p) (Seq stmt_spec (Many (Bind ws1_spec (fun _ => stmt_spec))))) tt tt j1 j2 [])) in Halt.
+    destruct Halt as [Hpure0 | Hmap].
+    + apply (fst (denote_pure_iff ascii unit tom_nt surface_grammar (prefix ++ w) Document ([] : Document) tt j1 [] tt j2)) in Hpure0.
+      destruct Hpure0 as [[_ _] Ej2]. subst j2.
+      assert (Hsk : skip_ws w = []).
+      { apply skip_ws_nil_conv. intros c Hcin.
+        destruct (In_nth_error w c Hcin) as [k Hk].
+        assert (Hklt : k < List.length w).
+        { apply (proj1 (nth_error_Some w k)). intro Hc. rewrite Hk in Hc. discriminate. }
+        assert (Habs : nth_error (prefix ++ w) (List.length prefix + k) = Some c).
+        { rewrite (@nth_error_app2 ascii prefix w (List.length prefix + k) ltac:(lia)).
+          replace (List.length prefix + k - List.length prefix) with k by lia. exact Hk. }
+        destruct (Nat.lt_ge_cases (List.length prefix + k) j1) as [Hlt | Hge].
+        - apply (ws_spec_nth_all_ws prefix w (List.length prefix) j1 Hws0 (List.length prefix + k) c).
+          + lia. + exact Habs.
+        - apply (ws_spec_nth_all_ws prefix w j1 (List.length (prefix ++ w)) Hws3 (List.length prefix + k) c).
+          + split; [exact Hge | rewrite length_app; lia]. + exact Habs. }
+      remember (List.length w) as fuel eqn:Hf. destruct fuel as [| n].
+      * rewrite parse_doc_O. rewrite Hsk. reflexivity.
+      * rewrite parse_doc_S. rewrite Hsk. reflexivity.
+    + apply (fst (denote_map_iff ascii unit tom_nt surface_grammar (prefix ++ w) (stmt * list stmt) Document
+        (fun p : stmt * list stmt => fst p :: snd p) (Seq stmt_spec (Many (Bind ws1_spec (fun _ => stmt_spec)))) tt tt j1 j2 [])) in Hmap.
+      destruct Hmap as [p [Ep _]]. discriminate.
+  - (* doc = s :: ss *)
+    unfold doc_spec in Hd.
+    apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar (prefix ++ w) unit Document ws_spec
+      (fun _ : unit => Bind (Alt (Pure ([] : Document)) (Map (fun p : stmt * list stmt => fst p :: snd p) (Seq stmt_spec (Many (Bind ws1_spec (fun _ => stmt_spec)))))) (fun doc : Document => Bind ws_spec (fun _ : unit => Pure doc))) tt tt (List.length prefix) (List.length (prefix ++ w)) (s :: ss))) in Hd.
+    destruct Hd as [γ1 [j1 [u [Hws0 Hbody]]]]. destruct γ1. destruct u.
+    apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar (prefix ++ w) Document Document
+      (Alt (Pure ([] : Document)) (Map (fun p : stmt * list stmt => fst p :: snd p) (Seq stmt_spec (Many (Bind ws1_spec (fun _ => stmt_spec))))))
+      (fun doc : Document => Bind ws_spec (fun _ : unit => Pure doc)) tt tt j1 (List.length (prefix ++ w)) (s :: ss))) in Hbody.
+    destruct Hbody as [γ2 [j2 [doc0 [Halt Htrail']]]]. destruct γ2.
+    apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar (prefix ++ w) unit Document ws_spec
+      (fun _ : unit => Pure doc0) tt tt j2 (List.length (prefix ++ w)) (s :: ss))) in Htrail'.
+    destruct Htrail' as [γ3 [j3 [u2 [Hws3 Hpure]]]]. destruct γ3. destruct u2.
+    apply (fst (denote_pure_iff ascii unit tom_nt surface_grammar (prefix ++ w) Document doc0 tt j3 (s :: ss) tt (List.length (prefix ++ w)))) in Hpure.
+    destruct Hpure as [[Edoc Ett] Ej3]. subst doc0. subst j3.
+    apply (fst (denote_alt_iff ascii unit tom_nt surface_grammar (prefix ++ w) Document
+      (Pure ([] : Document)) (Map (fun p : stmt * list stmt => fst p :: snd p) (Seq stmt_spec (Many (Bind ws1_spec (fun _ => stmt_spec))))) tt tt j1 j2 (s :: ss))) in Halt.
+    destruct Halt as [Hpure0 | Hmap].
+    + apply (fst (denote_pure_iff ascii unit tom_nt surface_grammar (prefix ++ w) Document ([] : Document) tt j1 (s :: ss) tt j2)) in Hpure0.
+      destruct Hpure0 as [[Edoc' _] _]. discriminate.
+    + apply (fst (denote_map_iff ascii unit tom_nt surface_grammar (prefix ++ w) (stmt * list stmt) Document
+        (fun p : stmt * list stmt => fst p :: snd p) (Seq stmt_spec (Many (Bind ws1_spec (fun _ => stmt_spec)))) tt tt j1 j2 (s :: ss))) in Hmap.
+      destruct Hmap as [p [Ep Hseq]].
+      apply (fst (denote_seq_iff ascii unit tom_nt surface_grammar (prefix ++ w) stmt (list stmt)
+        stmt_spec (Many (Bind ws1_spec (fun _ => stmt_spec))) tt tt j1 j2 p)) in Hseq.
+      destruct Hseq as [γ4 [j3 [s1 [ss1 [[Ep2 Hstmt] Hmany]]]]]. destruct γ4.
+      subst p. simpl in Ep. injection Ep as Hs Hss. subst s1 ss1.
+      pose proof (denote_pos_ge unit ws_spec tt (prefix ++ w) (List.length prefix) j1 Hws0) as Hlp_j1.
+      pose proof (denote_pos_ge stmt stmt_spec s (prefix ++ w) j1 j3 Hstmt) as Hj1_j3.
+      pose proof (denote_pos_ge (list stmt) (Many (Bind ws1_spec (fun _ => stmt_spec))) ss (prefix ++ w) j3 j2 Hmany) as Hj3_j2.
+      pose proof (denote_pos_ge unit ws_spec tt (prefix ++ w) j2 (List.length (prefix ++ w)) Hws3) as Hj2_len.
+      pose proof (stmt_consumes (prefix ++ w) j1 s j3 Hstmt) as Hstmt_consumes.
+      pose proof (stmt_head_nonws (prefix ++ w) j1 j3 s Hstmt) as Hmax_ws.
+      pose proof (ws_complete prefix w (List.length prefix) j1 Hws0 Hmax_ws) as Hskip_ws.
+      rewrite skipn_length_app in Hskip_ws.
+      assert (Hj3le : j3 <= List.length (prefix ++ w)) by (etransitivity; [exact Hj3_j2 | exact Hj2_len]).
+      assert (Hj1le : j1 <= List.length (prefix ++ w)) by (etransitivity; [exact Hj1_j3 | exact Hj3le]).
+      assert (Hstmt' : denote surface_grammar (firstn j1 (prefix ++ w) ++ skipn j1 (prefix ++ w)) stmt_spec tt (List.length (firstn j1 (prefix ++ w))) s tt j3).
+      { rewrite (firstn_skipn j1 (prefix ++ w)). rewrite (length_firstn j1 (prefix ++ w)).
+        rewrite (Nat.min_l j1 (List.length (prefix ++ w)) Hj1le). exact Hstmt. }
+      apply (fst (denote_many_iff ascii unit tom_nt surface_grammar (prefix ++ w) stmt (Bind ws1_spec (fun _ => stmt_spec)) tt tt j3 j2 ss)) in Hmany.
+      destruct Hmany as [Hnil | Hcons].
+      * (* ss = [] *)
+        destruct Hnil as [[Ess Eg] Ej]. subst ss. subst j2.
+        assert (Hnd : forall c, nth_error (prefix ++ w) j3 = Some c -> is_digit c = false).
+        { intros c0 Hc0. apply is_ws_digit.
+          apply (ws_spec_nth_all_ws prefix w j3 (List.length (prefix ++ w)) Hws3 j3 c0).
+          - split; [lia | apply (proj1 (nth_error_Some (prefix ++ w) j3)); intro H; rewrite Hc0 in H; discriminate].
+          - exact Hc0. }
+        assert (Hnd' : forall c, nth_error (firstn j1 (prefix ++ w) ++ skipn j1 (prefix ++ w)) j3 = Some c -> is_digit c = false).
+        { intros c0 Hc0. apply Hnd. rewrite (firstn_skipn j1 (prefix ++ w)) in Hc0. exact Hc0. }
+        pose proof (stmt_complete (firstn j1 (prefix ++ w)) (skipn j1 (prefix ++ w)) s j3 Hstmt' Hnd') as Hps.
+        rewrite length_skipn in Hps. rewrite (firstn_skipn j1 (prefix ++ w)) in Hps.
+        assert (Hps' : parse_stmt (List.length w - 1) (skipn j1 (prefix ++ w)) = Some (s, skipn j3 (prefix ++ w))).
+        { destruct (Nat.eq_dec j1 (List.length prefix)) as [Hj1 | Hj1].
+          - subst j1. rewrite skipn_length_app. rewrite skipn_length_app in Hps.
+            replace (List.length (prefix ++ w) - List.length prefix) with (List.length w) in Hps by (rewrite length_app; lia).
+            apply (parse_stmt_fuel_red w s (skipn j3 (prefix ++ w)) Hps).
+          - apply (parse_stmt_mono (List.length (prefix ++ w) - j1) (List.length w - 1) (skipn j1 (prefix ++ w)) (s, skipn j3 (prefix ++ w))).
+            + rewrite length_app. lia. + exact Hps. }
+        assert (Hsk_tail : skip_ws (skipn j3 (prefix ++ w)) = []).
+        { apply skip_ws_nil_conv. intros c Hcin.
+          destruct (In_nth_error (skipn j3 (prefix ++ w)) c Hcin) as [k Hk].
+          assert (Habs : nth_error (prefix ++ w) (j3 + k) = Some c).
+          { rewrite <- (nth_error_skipn j3 (prefix ++ w) k). exact Hk. }
+          apply (ws_spec_nth_all_ws prefix w j3 (List.length (prefix ++ w)) Hws3 (j3 + k) c).
+          - split; [lia |].
+            assert (Hklt : k < List.length (skipn j3 (prefix ++ w))).
+            { apply (proj1 (nth_error_Some (skipn j3 (prefix ++ w)) k)). intro H; rewrite Hk in H; discriminate. }
+            rewrite length_skipn in Hklt. lia.
+          - exact Habs. }
+        assert (Hwge : 1 <= List.length w) by (rewrite length_app in Hj3le; lia).
+        replace (List.length w) with (S (List.length w - 1)) by lia.
+        rewrite (parse_doc_S (List.length w - 1) w). rewrite Hskip_ws.
+           destruct (skipn j1 (prefix ++ w)) as [| h tl] eqn:Ew1.
+           ++ exfalso.
+              apply (f_equal (@List.length ascii)) in Ew1. simpl in Ew1.
+              rewrite length_skipn in Ew1. lia.
+           ++ rewrite Hps'. simpl. rewrite Hsk_tail. simpl. reflexivity.
+      * (* ss = s' :: ss' *)
+        destruct Hcons as [s' [ss' [γ'' [k [[Ess Hone] Htail]]]]]. subst ss. destruct γ''.
+        apply (fst (denote_bind_iff ascii unit tom_nt surface_grammar (prefix ++ w) unit stmt ws1_spec (fun _ : unit => stmt_spec) tt tt j3 k s')) in Hone.
+        destruct Hone as [γ1' [k1 [u' [Hws1sep Hstmt2]]]]. destruct u'. destruct γ1'.
+        pose proof (denote_pos_ge unit ws1_spec tt (prefix ++ w) j3 k1 Hws1sep) as Hj3k1.
+        assert (Hnd : forall c, nth_error (prefix ++ w) j3 = Some c -> is_digit c = false).
+        { intros c0 Hc0. apply is_ws_digit.
+          destruct (ws1_head (prefix ++ w) j3 k1 Hws1sep) as [d [Hnth_d Hws_d]].
+          rewrite Hnth_d in Hc0. injection Hc0 as Hc0'. subst c0. exact Hws_d. }
+        assert (Hnd' : forall c, nth_error (firstn j1 (prefix ++ w) ++ skipn j1 (prefix ++ w)) j3 = Some c -> is_digit c = false).
+        { intros c0 Hc0. apply Hnd. rewrite (firstn_skipn j1 (prefix ++ w)) in Hc0. exact Hc0. }
+        pose proof (stmt_complete (firstn j1 (prefix ++ w)) (skipn j1 (prefix ++ w)) s j3 Hstmt' Hnd') as Hps.
+        rewrite length_skipn in Hps. rewrite (firstn_skipn j1 (prefix ++ w)) in Hps.
+        assert (Hps' : parse_stmt (List.length w - 1) (skipn j1 (prefix ++ w)) = Some (s, skipn j3 (prefix ++ w))).
+        { destruct (Nat.eq_dec j1 (List.length prefix)) as [Hj1 | Hj1].
+          - subst j1. rewrite skipn_length_app. rewrite skipn_length_app in Hps.
+            replace (List.length (prefix ++ w) - List.length prefix) with (List.length w) in Hps by (rewrite length_app; lia).
+            apply (parse_stmt_fuel_red w s (skipn j3 (prefix ++ w)) Hps).
+          - apply (parse_stmt_mono (List.length (prefix ++ w) - j1) (List.length w - 1) (skipn j1 (prefix ++ w)) (s, skipn j3 (prefix ++ w))).
+            + rewrite length_app. lia. + exact Hps. }
+        assert (Hsk3_nonempty : skip_ws (skipn j3 (prefix ++ w)) <> []).
+        { intro Hsk3.
+          pose proof (skip_ws_nil_all (skipn j3 (prefix ++ w)) Hsk3) as Hall.
+          pose proof (stmt_head_char (prefix ++ w) k1 s' k Hstmt2) as [c Hnth_c].
+          pose proof (stmt_head_nonws (prefix ++ w) k1 k s' Hstmt2) as Hmax_s'.
+          specialize (Hmax_s' c Hnth_c).
+          assert (Hcin : In c (skipn j3 (prefix ++ w))).
+          { apply (nth_error_In (skipn j3 (prefix ++ w)) (k1 - j3)).
+            rewrite (nth_error_skipn j3 (prefix ++ w) (k1 - j3)).
+            replace (j3 + (k1 - j3)) with k1 by lia. exact Hnth_c. }
+          specialize (Hall c Hcin). rewrite Hall in Hmax_s'. discriminate. }
+        assert (Hrec_den : denote surface_grammar (prefix ++ w) doc_spec tt j3 (s' :: ss') tt (List.length (prefix ++ w))).
+        { unfold doc_spec.
+          apply d_bind with (a := tt) (γ' := tt) (j := k1).
+          - apply (ws1_to_ws prefix w j3 k1 Hws1sep).
+          - apply d_bind with (a := (s' :: ss')) (γ' := tt) (j := j2).
+            + apply d_alt_r. apply d_map with (a := (s', ss')).
+              apply d_seq with (γ' := tt) (j := k). exact Hstmt2. exact Htail.
+            + apply d_bind with (a := tt) (γ' := tt) (j := List.length (prefix ++ w)).
+              * exact Hws3.
+              * apply d_pure. }
+        assert (Hrec_den' : denote surface_grammar (firstn j3 (prefix ++ w) ++ skipn j3 (prefix ++ w)) doc_spec tt (List.length (firstn j3 (prefix ++ w))) (s' :: ss') tt (List.length (firstn j3 (prefix ++ w) ++ skipn j3 (prefix ++ w)))).
+        { rewrite (firstn_skipn j3 (prefix ++ w)). rewrite (length_firstn j3 (prefix ++ w)).
+          rewrite (Nat.min_l j3 (List.length (prefix ++ w)) Hj3le). exact Hrec_den. }
+        pose proof (IH (firstn j3 (prefix ++ w)) (skipn j3 (prefix ++ w)) Hrec_den') as Hrec.
+        rewrite length_skipn in Hrec.
+        pose proof (parse_doc_mono (List.length (prefix ++ w) - j3) (List.length w - 1) (skipn j3 (prefix ++ w)) (s' :: ss') ltac:(rewrite length_app; lia) Hrec) as Hrec'.
+        assert (Hwge : 1 <= List.length w) by (rewrite length_app in Hj3le; lia).
+        replace (List.length w) with (S (List.length w - 1)) by lia.
+        rewrite (parse_doc_S (List.length w - 1) w). rewrite Hskip_ws.
+           destruct (skipn j1 (prefix ++ w)) as [| h tl] eqn:Ew1.
+           ++ exfalso.
+              apply (f_equal (@List.length ascii)) in Ew1. simpl in Ew1.
+              rewrite length_skipn in Ew1. lia.
+           ++ rewrite Hps'.
+              destruct (ws1_head (prefix ++ w) j3 k1 Hws1sep) as [d [Hnth_d Hws_d]].
+              pose proof (skipn_cons_head ascii (prefix ++ w) j3 d Hnth_d) as Hskip3.
+              rewrite Hskip3. rewrite Hskip3 in Hrec'. cbn [skip_ws]. rewrite Hws_d. cbn [skip_ws].
+              destruct (skip_ws (skipn (S j3) (prefix ++ w))) as [| e rest0] eqn:Esk3'.
+              -- exfalso. apply Hsk3_nonempty. rewrite Hskip3. cbn [skip_ws]. rewrite Hws_d. cbn [skip_ws]. exact Esk3'.
+              -- cbn [skip_ws]. rewrite Hrec'. reflexivity.
+Qed.
+
+Lemma doc_complete : forall w doc,
+  denote surface_grammar w doc_spec tt 0 doc tt (List.length w) ->
+  parse_doc (List.length w) w = Some doc.
+Proof.
+  intros w doc Hd. apply (doc_complete_gen [] w doc). exact Hd.
+Qed.
