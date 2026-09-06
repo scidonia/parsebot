@@ -281,45 +281,55 @@ Decoded end-to-end; correct byte count verified.
 
 | input | chunks (×64 KB) | time | throughput |
 | --- | --- | --- | --- |
-| 1.05 MB | 16 | 0.12 s | 8.4 MB/s |
-| 4.19 MB | 64 | 1.03 s | 3.9 MB/s |
-| 8.39 MB | 128 | 3.44 s | 2.3 MB/s |
-| 16.78 MB | 256 | 9.58 s | 1.7 MB/s |
+| 1.05 MB | 16 | 0.11 s | 9.2 MB/s |
+| 4.19 MB | 64 | 0.40 s | 10.1 MB/s |
+| 8.39 MB | 128 | 0.78 s | 10.3 MB/s |
+| 16.78 MB | 256 | 1.57 s | 10.2 MB/s |
+| 33.56 MB | 512 | 3.09 s | 10.4 MB/s |
+| 67.12 MB | 1024 | 7.10 s | 9.0 MB/s |
 
 <div class="text-left text-sm text-gray-400 mt-4">
-Fixed total size, chunk-count effect — 1 MB decoded:
+Small chunks (realistic, 4 KB):
 </div>
 
-| 1 MB | chunks | time | throughput |
+| input | chunks | time | throughput |
 | --- | --- | --- | --- |
-| 4 KB × 256 | 0.39 s | 2.6 MB/s |
-| 64 KB × 16 | 0.12 s | 8.4 MB/s |
+| 1.05 MB | 256 | 0.075 s | 13.4 MB/s |
+| 4.20 MB | 1024 | 0.30 s | 13.2 MB/s |
+| 16.81 MB | 4096 | 1.24 s | 12.9 MB/s |
 
 ---
 layout: default
 ---
 
-# Benchmark — the honest cost
+# The fix — a single-pass `parse_exactly`
 
-Throughput **falls** as input grows. That is not a Zarith artifact — it is
-the value-dependent combinator:
+The first cut was **O(N²)**: `if n <=? length w then Some (firstn n w, skipn n w)`
+re-traversed the remaining suffix for every chunk.
 
 ```ocaml
-parse_exactly n w := if n <=? List.length w
-                     then Some (List.firstn n w, List.skipn n w) else None
+(* one O(n) pass — no length / firstn / skipn over the whole suffix *)
+Fixpoint parse_exactly n w :=
+  match n, w with
+  | O, _          => Some ([], w)
+  | S n', []      => None
+  | S n', c :: rest =>
+      match parse_exactly n' rest with
+      | None => None
+      | Some (d, r) => Some (c :: d, r)
+      end.
 ```
 
-`List.length`, `firstn`, and `skipn` each traverse the *remaining* suffix, so
-each chunk costs **O(remaining)** → **O(N² / chunk-size)** overall (vs. the
-cursor-driven JSON parser at ~30 MB/s).
+| 16 MB | naive (O(N²)) | single-pass (O(N)) |
+| --- | --- | --- |
+| time | 9.58 s | 1.57 s |
+| throughput | 1.7 MB/s | 10.2 MB/s |
 
 <div class="text-left text-sm mt-4">
 
-- **Correctness is the product**: the same `parse_exactly` that runs is the one
-  `parse_exactly_sound`/`parse_exactly_complete` certify.
-- **The cost is the representation**, not the proof: `list ascii` + `Exactly n`
-  forces suffix re-traversal. A cursor/`skipn`-only `parse_exactly` would recover
-  linear time — a follow-up, not a proof change.
+- **No theorem changed** — `parse_exactly_sound`, `parse_exactly_prefix`,
+  `parse_exactly_complete` keep identical *statements*; only their proofs are
+  re-done by induction on `n`. The downstream chunk/body proofs are untouched.
 
 </div>
 

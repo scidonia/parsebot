@@ -151,9 +151,19 @@ Definition parse_hex_size (w : list ascii) : option (nat * list ascii) :=
       else None
   end.
 
-(* Exactly n: consume exactly n octets, or fail. *)
-Definition parse_exactly (n : nat) (w : list ascii) : option (list ascii * list ascii) :=
-  if n <=? List.length w then Some (List.firstn n w, List.skipn n w) else None.
+(* Exactly n: consume exactly n octets, or fail.  A single O(n) pass: walk n
+   elements, building the prefix and returning the suffix — no O(length w)
+   traversal, so decoding a body is linear in the total input. *)
+Fixpoint parse_exactly (n : nat) (w : list ascii) : option (list ascii * list ascii) :=
+  match n, w with
+  | O, _ => Some ([], w)
+  | S n', [] => None
+  | S n', c :: rest =>
+      match parse_exactly n' rest with
+      | None => None
+      | Some (data, rest') => Some (c :: data, rest')
+      end
+  end.
 
 Definition parse_chunk (w : list ascii) : option (list ascii * list ascii) :=
   match parse_hex_size w with
@@ -332,9 +342,8 @@ Proof.
   revert prefix w data rest. induction n as [| n' IH]; intros prefix w data rest H.
   - cbn in H. injection H as Hd Hr. subst data rest.
     cbn. replace (List.length prefix + List.length w - List.length w) with (List.length prefix) by lia. apply d_exactly_nil.
-  - unfold parse_exactly in H. destruct (S n' <=? List.length w) eqn:Hle; [| cbn in H; discriminate].
-    rewrite Nat.leb_le in Hle.
-    destruct w as [| h tl]; [exfalso; cbn in Hle; lia |].
+  - cbn [parse_exactly] in H. destruct w as [| h tl]; [discriminate |].
+    destruct (parse_exactly n' tl) as [[d r] |] eqn:E; [| discriminate].
     injection H as Hd Hr. subst data rest.
     eapply d_exactly_cons.
     + apply octet_sound.
@@ -343,13 +352,10 @@ Proof.
         by (rewrite <- app_assoc; reflexivity).
       replace (S (List.length prefix)) with (List.length (prefix ++ h :: []))
         by (rewrite app_length; simpl; lia).
-      replace (List.length prefix + S (List.length tl) - List.length (skipn n' tl))
-        with (List.length (prefix ++ h :: []) + List.length tl - List.length (skipn n' tl))
+      replace (List.length prefix + S (List.length tl) - List.length r)
+        with (List.length (prefix ++ h :: []) + List.length tl - List.length r)
         by (rewrite app_length; simpl; lia).
-      apply (IH (prefix ++ h :: []) tl (List.firstn n' tl) (List.skipn n' tl)).
-      assert (Hleb : (n' <=? List.length tl) = true).
-      { apply (proj2 (Nat.leb_le n' (List.length tl))). cbn in Hle. lia. }
-      unfold parse_exactly. rewrite Hleb. reflexivity.
+      apply (IH (prefix ++ h :: []) tl d r E).
 Qed.
 
 (* Consumed-prefix facts: the parser's result is a suffix of the input. *)
@@ -380,10 +386,12 @@ Qed.
 Lemma parse_exactly_prefix (n : nat) (w : list ascii) (data rest : list ascii) :
   parse_exactly n w = Some (data, rest) -> data ++ rest = w.
 Proof.
-  unfold parse_exactly. intros H.
-  destruct (n <=? List.length w) eqn:Hle; [| discriminate].
-  injection H as Hd Hr. subst data rest.
-  apply List.firstn_skipn.
+  revert w data rest. induction n as [| n' IH]; intros w data rest H.
+  - cbn [parse_exactly] in H. injection H as Hd Hr. subst data rest. reflexivity.
+  - cbn [parse_exactly] in H. destruct w as [| h tl]; [discriminate |].
+    destruct (parse_exactly n' tl) as [[d r] |] eqn:E; [| discriminate].
+    injection H as Hd Hr. subst data rest.
+    specialize (IH tl d r E). simpl. rewrite IH. reflexivity.
 Qed.
 
 (* The framing theorem: a chunk's payload is exactly its hex-declared size. *)
@@ -796,11 +804,7 @@ Proof.
       replace (List.length (prefix ++ a :: consumed')) with (List.length ((prefix ++ [a]) ++ consumed')) in Hrest
         by (rewrite !app_length; simpl; lia).
       specialize (IH (prefix ++ [a]) consumed' rest as' Hrest).
-      unfold parse_exactly in *. simpl.
-      destruct (n' <=? List.length (consumed' ++ rest)) eqn:He'.
-      * injection IH as Efirstn Eskipn.
-        simpl. rewrite Efirstn. rewrite Eskipn. reflexivity.
-      * inversion IH.
+      simpl. rewrite IH. reflexivity.
 
 Qed.
 
