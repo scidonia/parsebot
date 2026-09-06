@@ -1334,3 +1334,161 @@ Proof.
     destruct H as [doc [Hp Hr]].
     rewrite Hp. simpl. rewrite Hr. reflexivity.
 Qed.
+
+(* ------------------------------------------------------------------------- *)
+(* Completeness: every denotation is accepted by the parser                   *)
+(* ------------------------------------------------------------------------- *)
+
+
+Lemma nth_error_skipn_head (A : Type) (w : list A) (i : nat) :
+  nth_error (skipn i w) 0 = nth_error w i.
+Proof.
+  revert w. induction i as [| i' IH]; intros w.
+  - reflexivity.
+  - destruct w as [| a w']; [simpl; reflexivity | simpl; apply IH].
+Qed.
+
+Lemma skipn_length_app (prefix w : list ascii) :
+  skipn (List.length prefix) (prefix ++ w) = w.
+Proof.
+  revert w. induction prefix as [| p ps IH]; intros w; simpl; [reflexivity | apply IH].
+Qed.
+
+Lemma skipn_cons_head (A : Type) (w : list A) (i : nat) (c : A) :
+  nth_error w i = Some c -> skipn i w = c :: skipn (S i) w.
+Proof.
+  revert w. induction i as [| i' IH]; intros w H.
+  - destruct w as [| a w']; simpl in *; [discriminate | injection H as Hc; subst; reflexivity].
+  - destruct w as [| a w']; simpl in *; [discriminate | apply IH; exact H].
+Qed.
+
+Lemma take_digits_none (w : list ascii) :
+  (forall c, nth_error w 0 = Some c -> is_digit c = false) ->
+  take_digits w = (nil, w).
+Proof.
+  destruct w as [| c w']; intros Hnd; simpl; [reflexivity |].
+  destruct (is_digit c) eqn:E.
+  - assert (Hc : nth_error (c :: w') 0 = Some c) by reflexivity.
+    specialize (Hnd c Hc). rewrite Hnd in E. discriminate.
+  - reflexivity.
+Qed.
+
+Lemma take_ident_none (w : list ascii) :
+  (forall c, nth_error w 0 = Some c -> is_ident_char c = false) ->
+  take_ident w = (nil, w).
+Proof.
+  destruct w as [| c w']; intros Hnd; simpl; [reflexivity |].
+  destruct (is_ident_char c) eqn:E.
+  - assert (Hc : nth_error (c :: w') 0 = Some c) by reflexivity.
+    specialize (Hnd c Hc). rewrite Hnd in E. discriminate.
+  - reflexivity.
+Qed.
+
+(* Keep `skipn`/`take_digits`/`take_ident` abstract while destructing their
+   results: `cbn`/`simpl` would otherwise reduce `skipn (S i) (prefix ++ w)`
+   by iota (the `nat` argument is a constructor), desynchronising `destruct`. *)
+Opaque skipn digits_to_nat.
+
+Lemma take_digits_complete (prefix w : list ascii) (i j : nat) (ds : list ascii) :
+  denote surface_grammar (prefix ++ w) (Many digit_spec) tt i ds tt j ->
+  (forall c, nth_error (prefix ++ w) j = Some c -> is_digit c = false) ->
+  take_digits (skipn i (prefix ++ w)) = (ds, skipn j (prefix ++ w)).
+Proof.
+  revert prefix w i j. induction ds as [| d ds' IH]; intros prefix w i j Hd Hnd.
+  - apply (fst (denote_many_iff ascii unit tom_nt surface_grammar (prefix ++ w) ascii digit_spec tt tt i j (@nil ascii))) in Hd.
+    destruct Hd as [Hnil | Hcons].
+    + destruct Hnil as [[_ Eg] Ej]. subst.
+      apply take_digits_none. intros c Hc.
+      rewrite nth_error_skipn_head in Hc. eapply Hnd. exact Hc.
+    + destruct Hcons as [a [as' [γ'' [k [[E _] _]]]]]. discriminate.
+  - apply (fst (denote_many_iff ascii unit tom_nt surface_grammar (prefix ++ w) ascii digit_spec tt tt i j (d :: ds'))) in Hd.
+    destruct Hd as [Hnil | Hcons].
+    + destruct Hnil as [[E _] _]. discriminate.
+    + destruct Hcons as [a [as' [γ'' [k [[E Hone] Htail]]]]].
+      injection E as Ed Eas'. subst a as'.
+      apply (fst (denote_tok_iff ascii unit tom_nt surface_grammar (prefix ++ w) (fun c => is_digit c = true) d tt γ'' i k)) in Hone.
+      destruct Hone as [[[Eg Ej] Hnth] HP]. subst γ''. subst k.
+      rewrite (skipn_cons_head ascii (prefix ++ w) i d Hnth).
+      cbn -[skipn]. rewrite HP.
+      destruct (take_digits (skipn (S i) (prefix ++ w))) as [ds1 rest1] eqn:Etd.
+      rewrite (IH prefix w (S i) j Htail Hnd) in Etd. injection Etd as H1 H2. subst ds1 rest1. reflexivity.
+Qed.
+
+(* int: a denotation whose next position is not a digit forces parse_int. *)
+Lemma int_complete (prefix w : list ascii) (n : nat) (j : nat) :
+  denote surface_grammar (prefix ++ w) int_spec tt (List.length prefix) n tt j ->
+  (forall c, nth_error (prefix ++ w) j = Some c -> is_digit c = false) ->
+  parse_int w = Some (n, skipn j (prefix ++ w)).
+Proof.
+  intros Hd Hnd. unfold int_spec in Hd.
+  apply (fst (denote_map_iff ascii unit tom_nt surface_grammar (prefix ++ w) (ascii * list ascii) nat
+    (fun p : ascii * list ascii => digits_to_nat (fst p :: snd p) 0)
+    (Seq digit_spec (Many digit_spec)) tt tt (List.length prefix) j n)) in Hd.
+  destruct Hd as [p [En Hseq]].
+  apply (fst (denote_seq_iff ascii unit tom_nt surface_grammar (prefix ++ w) ascii (list ascii)
+    digit_spec (Many digit_spec) tt tt (List.length prefix) j p)) in Hseq.
+  destruct Hseq as [γ' [k [d [ds [[Ep Hd1] Hd2]]]]].
+  subst p. simpl in En.
+  apply (fst (denote_tok_iff ascii unit tom_nt surface_grammar (prefix ++ w) (fun c => is_digit c = true) d tt γ' (List.length prefix) k)) in Hd1.
+  destruct Hd1 as [[[Eg Ek] Hnth] HP]. subst γ'. subst k.
+  rewrite <- (skipn_length_app prefix w) at 1.
+  rewrite (skipn_cons_head ascii (prefix ++ w) (List.length prefix) d Hnth).
+  unfold parse_int. cbn -[skipn]. rewrite HP.
+  destruct (take_digits (skipn (S (List.length prefix)) (prefix ++ w))) as [ds1 rest1] eqn:Etd.
+  rewrite (take_digits_complete prefix w (S (List.length prefix)) j ds Hd2 Hnd) in Etd.
+  injection Etd as Hds1 Hrest1. subst ds1 rest1.
+  congruence.
+Qed.
+
+Lemma take_ident_complete (prefix w : list ascii) (i j : nat) (ds : list ascii) :
+  denote surface_grammar (prefix ++ w) (Many (Tok (fun c => is_ident_char c = true))) tt i ds tt j ->
+  (forall c, nth_error (prefix ++ w) j = Some c -> is_ident_char c = false) ->
+  take_ident (skipn i (prefix ++ w)) = (ds, skipn j (prefix ++ w)).
+Proof.
+  revert prefix w i j. induction ds as [| d ds' IH]; intros prefix w i j Hd Hnd.
+  - apply (fst (denote_many_iff ascii unit tom_nt surface_grammar (prefix ++ w) ascii (Tok (fun c => is_ident_char c = true)) tt tt i j (@nil ascii))) in Hd.
+    destruct Hd as [Hnil | Hcons].
+    + destruct Hnil as [[_ Eg] Ej]. subst.
+      apply take_ident_none. intros c Hc.
+      rewrite nth_error_skipn_head in Hc. eapply Hnd. exact Hc.
+    + destruct Hcons as [a [as' [γ'' [k [[E _] _]]]]]. discriminate.
+  - apply (fst (denote_many_iff ascii unit tom_nt surface_grammar (prefix ++ w) ascii (Tok (fun c => is_ident_char c = true)) tt tt i j (d :: ds'))) in Hd.
+    destruct Hd as [Hnil | Hcons].
+    + destruct Hnil as [[E _] _]. discriminate.
+    + destruct Hcons as [a [as' [γ'' [k [[E Hone] Htail]]]]].
+      injection E as Ed Eas'. subst a as'.
+      apply (fst (denote_tok_iff ascii unit tom_nt surface_grammar (prefix ++ w) (fun c => is_ident_char c = true) d tt γ'' i k)) in Hone.
+      destruct Hone as [[[Eg Ej] Hnth] HP]. subst γ''. subst k.
+      specialize (IH prefix w (S i) j Htail Hnd).
+      rewrite (skipn_cons_head ascii (prefix ++ w) i d Hnth).
+      cbn -[skipn]. rewrite HP.
+      destruct (take_ident (skipn (S i) (prefix ++ w))) as [ds1 rest1] eqn:Etd.
+      rewrite IH in Etd. congruence.
+Qed.
+
+Lemma ident_complete (prefix w : list ascii) (s : seg) (j : nat) :
+  denote surface_grammar (prefix ++ w) ident_spec tt (List.length prefix) s tt j ->
+  (forall c, nth_error (prefix ++ w) j = Some c -> is_ident_char c = false) ->
+  parse_ident w = Some (s, skipn j (prefix ++ w)).
+Proof.
+  intros Hd Hnd. unfold ident_spec in Hd.
+  apply (fst (denote_map_iff ascii unit tom_nt surface_grammar (prefix ++ w) (ascii * list ascii) seg
+    (fun p : ascii * list ascii => fst p :: snd p)
+    (Seq (Tok (fun c => is_ident_char c = true)) (Many (Tok (fun c => is_ident_char c = true)))) tt tt (List.length prefix) j s)) in Hd.
+  destruct Hd as [p [Es Hseq]].
+  apply (fst (denote_seq_iff ascii unit tom_nt surface_grammar (prefix ++ w) ascii (list ascii)
+    (Tok (fun c => is_ident_char c = true)) (Many (Tok (fun c => is_ident_char c = true))) tt tt (List.length prefix) j p)) in Hseq.
+  destruct Hseq as [γ' [k [d [ds [[Ep Hd1] Hd2]]]]].
+  subst p. simpl in Es.
+  apply (fst (denote_tok_iff ascii unit tom_nt surface_grammar (prefix ++ w) (fun c => is_ident_char c = true) d tt γ' (List.length prefix) k)) in Hd1.
+  destruct Hd1 as [[[Eg Ek] Hnth] HP]. subst γ'. subst k.
+  rewrite <- (skipn_length_app prefix w) at 1.
+  rewrite (skipn_cons_head ascii (prefix ++ w) (List.length prefix) d Hnth).
+  unfold parse_ident. cbn -[skipn]. rewrite HP.
+  destruct (take_ident (skipn (S (List.length prefix)) (prefix ++ w))) as [ds1 rest1] eqn:Etd.
+  rewrite (take_ident_complete prefix w (S (List.length prefix)) j ds Hd2 Hnd) in Etd.
+  injection Etd as Hds1 Hrest1. subst ds1 rest1.
+  subst s. reflexivity.
+Qed.
+
+Transparent skipn digits_to_nat.
