@@ -14,7 +14,7 @@
    a certified decision procedure `run`, and runnable examples.  The
    character-level surface grammar (the BNF) is a separate stage. *)
 
-From Stdlib Require Import List Bool Nat.
+From Stdlib Require Import List Bool Nat Ascii.
 Import ListNotations.
 
 (* ------------------------------------------------------------------------- *)
@@ -23,7 +23,7 @@ Import ListNotations.
 
 (* A key is a non-empty dotted path of segment names.  (Abstract segments;
    the surface lexer maps bare/dotted keys onto these.) *)
-Definition seg : Type := nat.
+Definition seg : Type := list ascii.
 Definition key : Type := list seg.
 
 (* How a path was introduced. *)
@@ -47,10 +47,17 @@ Definition Document : Type := list stmt.
 (* Decidable equality for keys and kinds (needed by the decision procedure).  *)
 (* ------------------------------------------------------------------------- *)
 
+Fixpoint seg_eqb (s1 s2 : seg) : bool :=
+  match s1, s2 with
+  | [], [] => true
+  | c1 :: r1, c2 :: r2 => Ascii.eqb c1 c2 && seg_eqb r1 r2
+  | _, _ => false
+  end.
+
 Fixpoint key_eqb (k1 k2 : key) : bool :=
   match k1, k2 with
   | [], [] => true
-  | s1 :: r1, s2 :: r2 => Nat.eqb s1 s2 && key_eqb r1 r2
+  | s1 :: r1, s2 :: r2 => seg_eqb s1 s2 && key_eqb r1 r2
   | _, _ => false
   end.
 
@@ -130,19 +137,19 @@ Fixpoint run (ns : Namespace) (doc : Document) : option Namespace :=
 *    b.c = 2        →  b : Implicit,  b.c : Scalar
 *    b.d = 3        →  b.d : Scalar  (b stays implicit)                     *)
 Definition ex_valid : Document :=
-  [SKV [1] 1; SKV [2;3] 2; SKV [2;4] 3].
+  [SKV [["a"%char]] 1; SKV [["b"%char]; ["c"%char]] 2; SKV [["b"%char]; ["d"%char]] 3].
 
 (* duplicate key:  a = 1  then  a = 2 *)
-Definition ex_dup_key : Document := [SKV [1] 1; SKV [1] 2].
+Definition ex_dup_key : Document := [SKV [["a"%char]] 1; SKV [["a"%char]] 2].
 
 (* table redefinition:  [a]  then  [a] *)
-Definition ex_dup_table : Document := [STable [1]; STable [1]].
+Definition ex_dup_table : Document := [STable [["a"%char]]; STable [["a"%char]]].
 
 (* array re-append:  [[a]]  then  [[a]]  — allowed *)
-Definition ex_array_append : Document := [SArray [1]; SArray [1]].
+Definition ex_array_append : Document := [SArray [["a"%char]]; SArray [["a"%char]]].
 
 (* table under a scalar:  a = 1  then  [a.b] — blocked *)
-Definition ex_table_under_scalar : Document := [SKV [1] 1; STable [1;2]].
+Definition ex_table_under_scalar : Document := [SKV [["a"%char]] 1; STable [["a"%char]; ["b"%char]]].
 
 Eval compute in run [] ex_valid.
 Eval compute in run [] ex_dup_key.
@@ -316,3 +323,225 @@ Proof.
   - exists ns'. exact Hd.
   - rewrite (step_step' ns s ns' Hd). apply d_put.
 Qed.
+
+(* ------------------------------------------------------------------------- *)
+(* The surface grammar (BNF) — characters to statements                       *)
+(* ------------------------------------------------------------------------- *)
+
+Definition surface_grammar : Grammar unit unit tom_nt :=
+  fun (A : Type) (n : tom_nt A) => match n with end.
+
+(* a literal character *)
+Definition ch (c : ascii) : Spec ascii unit tom_nt unit :=
+  Map (fun _ : ascii => tt) (Tok (fun c' => Ascii.eqb c' c = true)).
+
+Definition is_digit (c : ascii) : bool :=
+  Ascii.eqb c "0"%char || Ascii.eqb c "1"%char || Ascii.eqb c "2"%char
+  || Ascii.eqb c "3"%char || Ascii.eqb c "4"%char || Ascii.eqb c "5"%char
+  || Ascii.eqb c "6"%char || Ascii.eqb c "7"%char || Ascii.eqb c "8"%char
+  || Ascii.eqb c "9"%char.
+
+Definition is_ws (c : ascii) : bool :=
+  Ascii.eqb c " "%char || Ascii.eqb c "009"%char
+  || Ascii.eqb c "010"%char || Ascii.eqb c "013"%char.
+
+(* identifiers: any non-ws, non-structural character *)
+Definition is_ident_char (c : ascii) : bool :=
+  negb (is_ws c || Ascii.eqb c "="%char || Ascii.eqb c "["%char
+        || Ascii.eqb c "]"%char || Ascii.eqb c "."%char).
+
+Definition ws_spec : Spec ascii unit tom_nt (list unit) :=
+  Many (Map (fun _ : ascii => tt) (Tok (fun c => is_ws c = true))).
+
+Definition digit_spec : Spec ascii unit tom_nt ascii := Tok (fun c => is_digit c = true).
+
+Fixpoint digits_to_nat (ds : list ascii) (acc : nat) : nat :=
+  match ds with
+  | [] => acc
+  | d :: rest =>
+      if Ascii.eqb d "0"%char then digits_to_nat rest (10 * acc + 0)
+      else if Ascii.eqb d "1"%char then digits_to_nat rest (10 * acc + 1)
+      else if Ascii.eqb d "2"%char then digits_to_nat rest (10 * acc + 2)
+      else if Ascii.eqb d "3"%char then digits_to_nat rest (10 * acc + 3)
+      else if Ascii.eqb d "4"%char then digits_to_nat rest (10 * acc + 4)
+      else if Ascii.eqb d "5"%char then digits_to_nat rest (10 * acc + 5)
+      else if Ascii.eqb d "6"%char then digits_to_nat rest (10 * acc + 6)
+      else if Ascii.eqb d "7"%char then digits_to_nat rest (10 * acc + 7)
+      else if Ascii.eqb d "8"%char then digits_to_nat rest (10 * acc + 8)
+      else digits_to_nat rest (10 * acc + 9)
+  end.
+
+(* a non-negative integer: one or more digits *)
+Definition int_spec : Spec ascii unit tom_nt nat :=
+  Map (fun p : ascii * list ascii => digits_to_nat (fst p :: snd p) 0)
+      (Seq digit_spec (Many digit_spec)).
+
+(* a bare identifier: one or more ident characters *)
+Definition ident_spec : Spec ascii unit tom_nt seg :=
+  Map (fun p : ascii * list ascii => fst p :: snd p)
+      (Seq (Tok (fun c => is_ident_char c = true)) (Many (Tok (fun c => is_ident_char c = true)))).
+
+(* a (possibly dotted) key: ident (. ident)* *)
+Definition key_spec : Spec ascii unit tom_nt key :=
+  Map (fun p : seg * list seg => fst p :: snd p)
+      (Seq ident_spec
+           (Many (Map (fun p : unit * seg => snd p) (Seq (ch "."%char) ident_spec)))).
+
+(* key = value *)
+Definition kv_spec : Spec ascii unit tom_nt stmt :=
+  Bind key_spec (fun k =>
+    Bind ws_spec (fun _ =>
+      Bind (ch "="%char) (fun _ =>
+        Bind ws_spec (fun _ =>
+          Map (fun v : nat => SKV k v) int_spec)))).
+
+(* [key] *)
+Definition table_spec : Spec ascii unit tom_nt stmt :=
+  Bind (ch "["%char) (fun _ =>
+    Bind key_spec (fun k =>
+      Bind (ch "]"%char) (fun _ => Pure (STable k)))).
+
+(* [[key]] *)
+Definition array_spec : Spec ascii unit tom_nt stmt :=
+  Bind (ch "["%char) (fun _ =>
+    Bind (ch "["%char) (fun _ =>
+      Bind key_spec (fun k =>
+        Bind (ch "]"%char) (fun _ =>
+          Bind (ch "]"%char) (fun _ => Pure (SArray k)))))).
+
+Definition stmt_spec : Spec ascii unit tom_nt stmt :=
+  Alt kv_spec (Alt table_spec array_spec).
+
+(* a document: (ws stmt)* ws *)
+Definition doc_spec : Spec ascii unit tom_nt Document :=
+  Bind ws_spec (fun _ =>
+    Many (Bind ws_spec (fun _ => stmt_spec))).
+
+(* ------------------------------------------------------------------------- *)
+(* The surface parser (fuel-bounded)                                          *)
+(* ------------------------------------------------------------------------- *)
+
+Fixpoint collect_digits (w : list ascii) (acc : list ascii) : list ascii * list ascii :=
+  match w with
+  | c :: rest => if is_digit c then collect_digits rest (acc ++ [c]) else (acc, w)
+  | [] => (acc, [])
+  end.
+
+Fixpoint skip_ws (w : list ascii) : list ascii :=
+  match w with
+  | c :: rest => if is_ws c then skip_ws rest else w
+  | [] => []
+  end.
+
+Fixpoint collect_ident (w : list ascii) (acc : list ascii) : list ascii * list ascii :=
+  match w with
+  | c :: rest => if is_ident_char c then collect_ident rest (acc ++ [c]) else (acc, w)
+  | [] => (acc, [])
+  end.
+
+(* parse an integer: returns (value, rest) *)
+Definition parse_int (w : list ascii) : option (nat * list ascii) :=
+  match w with
+  | c :: rest => if is_digit c
+      then let (ds, rest') := collect_digits rest [c] in Some (digits_to_nat ds 0, rest')
+      else None
+  | [] => None
+  end.
+
+(* parse an identifier segment: returns (segment, rest) *)
+Definition parse_ident (w : list ascii) : option (seg * list ascii) :=
+  match w with
+  | c :: rest => if is_ident_char c
+      then let (ds, rest') := collect_ident rest [c] in Some (ds, rest')
+      else None
+  | [] => None
+  end.
+
+(* parse a (dotted) key *)
+Fixpoint parse_key (fuel : nat) (w : list ascii) : option (key * list ascii) :=
+  match fuel with
+  | O => None
+  | S fuel' =>
+      match parse_ident w with
+      | None => None
+      | Some (s, rest) =>
+          match rest with
+          | "."%char :: rest' =>
+              match parse_key fuel' rest' with
+              | None => None
+              | Some (ks, rest'') => Some (s :: ks, rest'')
+              end
+          | _ => Some ([s], rest)
+          end
+      end
+  end.
+
+Definition parse_stmt (fuel : nat) (w : list ascii) : option (stmt * list ascii) :=
+  match fuel, w with
+  | O, _ | _, [] => None
+  | S fuel', c :: rest =>
+      if Ascii.eqb c "["%char then
+        match rest with
+        | "["%char :: rest' =>
+            match parse_key fuel' rest' with
+            | Some (k, "]"%char :: "]"%char :: rest'') => Some (SArray k, rest'')
+            | _ => None
+            end
+        | _ =>
+            match parse_key fuel' rest with
+            | Some (k, "]"%char :: rest'') => Some (STable k, rest'')
+            | _ => None
+            end
+        end
+      else
+        match parse_key fuel' w with
+        | Some (k, rest) =>
+            match skip_ws rest with
+            | "="%char :: rest' =>
+                match parse_int (skip_ws rest') with
+                | Some (v, rest'') => Some (SKV k v, rest'')
+                | None => None
+                end
+            | _ => None
+            end
+        | _ => None
+        end
+  end.
+
+Fixpoint parse_doc (fuel : nat) (w : list ascii) : option Document :=
+  let w' := skip_ws w in
+  match w' with
+  | [] => Some []
+  | _ =>
+      match fuel with
+      | O => None
+      | S fuel' =>
+          match parse_stmt fuel' w' with
+          | None => None
+          | Some (s, rest) =>
+              match parse_doc fuel' rest with
+              | None => None
+              | Some ss => Some (s :: ss)
+              end
+          end
+      end
+  end.
+
+(* parse-then-validate: surface-parse, then run the state machine *)
+Definition parse_then_validate (w : list ascii) : option Namespace :=
+  match parse_doc (S (2 * List.length w)) w with
+  | None => None
+  | Some doc => run [] doc
+  end.
+
+(* ------------------------------------------------------------------------- *)
+(* Surface examples                                                           *)
+(* ------------------------------------------------------------------------- *)
+
+Definition ex_text : list ascii :=
+  "a"%char :: " "%char :: "="%char :: " "%char :: "1"%char :: "010"%char ::
+  "b"%char :: "."%char :: "c"%char :: " "%char :: "="%char :: " "%char :: "2"%char :: "010"%char ::
+  "b"%char :: "."%char :: "d"%char :: " "%char :: "="%char :: " "%char :: "3"%char :: [].
+
+Eval compute in parse_doc 100 ex_text.
+Eval compute in parse_then_validate ex_text.
