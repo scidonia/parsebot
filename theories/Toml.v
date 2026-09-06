@@ -257,3 +257,62 @@ Proof.
   - reflexivity.
   - rewrite (step_step' ns s ns' H). exact IHdoc_valid.
 Qed.
+
+(* ------------------------------------------------------------------------- *)
+(* DocumentStep through the Spec framework (Get / Guard / Put)                *)
+(* ------------------------------------------------------------------------- *)
+
+From Parsebot Require Import Spec.
+
+(* No recursion in this fragment: the nonterminal family is empty. *)
+Inductive tom_nt : Type -> Type := .
+
+Definition tom_grammar : Grammar unit Namespace tom_nt :=
+  fun (A : Type) (n : tom_nt A) => match n with end.
+
+(* A statement is valid in ns: there is a resulting namespace. *)
+Definition valid_step (ns : Namespace) (s : stmt) : Type :=
+  { ns' : Namespace & DocumentStep ns s ns' }.
+
+(* The state-indexed statement spec: read the namespace, check the statement's
+   validity (declaratively), and write the new namespace.  Token = unit — the
+   cursor stays 0; the character surface is a separate layer. *)
+Definition step_spec (s : stmt) : Spec unit Namespace tom_nt unit :=
+  Bind Get (fun ns : Namespace =>
+    Guard (fun _ : unit => valid_step ns s)
+      (match step ns s with
+       | None => Fail
+       | Some ns' => Put ns'
+       end)).
+
+Lemma step_spec_sound : forall ns s ns',
+  denote tom_grammar [] (step_spec s) ns 0 tt ns' 0 -> DocumentStep ns s ns'.
+Proof.
+  intros ns s ns' H. unfold step_spec in H.
+  pose proof (fst (denote_bind_iff unit Namespace tom_nt tom_grammar []
+      Namespace unit Get (fun ns0 : Namespace => Guard (fun _ : unit => valid_step ns0 s)
+        (match step ns0 s with None => Fail | Some n => Put n end))
+      ns ns' 0 0 tt) H) as Hb.
+  destruct Hb as [γ' [j [a [Hget Hbody]]]].
+  pose proof (fst (denote_get_iff unit Namespace tom_nt tom_grammar [] ns a γ' 0 j) Hget) as Hg.
+  destruct Hg as [[Hr Hg'] Hj]. subst a. subst γ'. subst j.
+  pose proof (fst (denote_guard_iff unit Namespace tom_nt tom_grammar []
+      unit (fun _ : unit => valid_step ns s)
+      (match step ns s with None => Fail | Some n => Put n end) ns ns' 0 0 tt) Hbody) as Hgd.
+  destruct Hgd as [_ Hstep].  (* discard the valid_step evidence *)
+  destruct (step ns s) as [n |] eqn:E.
+  - pose proof (fst (denote_put_iff unit Namespace tom_nt tom_grammar [] ns n ns' 0 0 tt) Hstep) as Hp.
+    destruct Hp as [[_ Hns'] _]. subst ns'.
+    apply (step_step ns s n E).
+  - exfalso. exact (denote_fail_elim unit Namespace tom_nt tom_grammar [] unit ns 0 tt ns' 0 Hstep).
+Qed.
+
+Lemma step_spec_complete : forall ns s ns',
+  DocumentStep ns s ns' -> denote tom_grammar [] (step_spec s) ns 0 tt ns' 0.
+Proof.
+  intros ns s ns' Hd. unfold step_spec.
+  eapply d_bind. apply d_get.
+  eapply d_guard.
+  - exists ns'. exact Hd.
+  - rewrite (step_step' ns s ns' Hd). apply d_put.
+Qed.
