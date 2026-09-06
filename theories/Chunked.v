@@ -1405,3 +1405,15 @@ Proof.
   unfold parse_chunked_body. rewrite Ebody. simpl. reflexivity.
 Qed.
 
+(* ------------------------------------------------------------------------- *)
+(* 9. Extraction: the decoder compiles to OCaml                              *)
+(* ------------------------------------------------------------------------- *)
+
+From Stdlib Require Import Extraction.
+From Stdlib Require Import ExtrOcamlNatBigInt ExtrOcamlZBigInt ExtrOcamlChar.
+(* nat and Z both extract to Big_int_Z.big_int (= Zarith Z.t); of_nat is the
+   identity. ascii extracts to char. *)
+Extract Constant Z.of_nat => "(fun n -> n)".
+Extraction Language OCaml.
+Extraction "chunked.ml" parse_chunked_body.
+
