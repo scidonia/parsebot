@@ -3249,3 +3249,15 @@ Lemma doc_complete : forall w doc,
 Proof.
   intros w doc Hd. apply (doc_complete_gen [] w doc). exact Hd.
 Qed.
+
+(* ------------------------------------------------------------------------- *)
+(* Extraction: the TOML parser compiles to OCaml                              *)
+(* ------------------------------------------------------------------------- *)
+
+From Stdlib Require Import Extraction.
+From Stdlib Require Import ExtrOcamlNatBigInt ExtrOcamlZBigInt ExtrOcamlChar.
+(* nat and Z both extract to Big_int_Z.big_int (= Zarith Z.t); of_nat is the
+   identity. ascii extracts to char. *)
+Extract Constant Z.of_nat => "(fun n -> n)".
+Extraction Language OCaml.
+Extraction "toml.ml" parse_then_validate direct_parse parse_doc.

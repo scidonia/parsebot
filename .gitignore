@@ -22,12 +22,16 @@ builddep/
 # hand-written benchmark drivers (tracked, not extraction output)
 !bench_*.ml
 
+# hand-written Big_int_Z shim over Zarith (companion for extraction, tracked)
+!Big_int_Z.ml
+
 # ocaml build artifacts (extracted parser bench)
 bench
+bench_toml
 *.cmi
 *.cmo
 *.cmx
 *.o
-
-# benchmark inputs (downloaded / generated; see bench_data/gen_large_int.py)
+# benchmark inputs (downloaded / generated; see bench_data/gen_*.py)
 bench_data/*.json
+bench_data/*.toml
