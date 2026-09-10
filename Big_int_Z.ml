@@ -10,6 +10,7 @@ let unit_big_int = Z.one
 let succ_big_int = Z.succ
 let pred_big_int = Z.pred
 let add_big_int = Z.add
+let sub_big_int = Z.sub
 let mult_big_int = Z.mul
 let minus_big_int = Z.neg
 let eq_big_int = Z.equal

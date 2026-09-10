@@ -18,7 +18,8 @@ let summarize (j : Json.json) : string =
   match j with
   | Json.JNull -> "null"
   | Json.JBool _ -> "bool"
-  | Json.JNumber n -> Printf.sprintf "number(%s)" (Big_int_Z.string_of_big_int n)
+  | Json.JNumber (m, e) ->
+      Printf.sprintf "number(%s e%s)" (Big_int_Z.string_of_big_int m) (Big_int_Z.string_of_big_int e)
   | Json.JString _ -> "string"
   | Json.JArray xs -> Printf.sprintf "array[%d]" (list_len 0 xs)
   | Json.JObject xs -> Printf.sprintf "object[%d]" (list_len 0 xs)

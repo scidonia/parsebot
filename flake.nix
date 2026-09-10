@@ -17,6 +17,17 @@
             (pkgs.rocq-core.withPackages (ps: [ ps.stdpp ]))
           ];
         };
+        # Rocq 9.1 + stdpp + the Peregrine typed-extraction framework (MetaRocq),
+        # for Rust/Elm extraction experiments. Rollback = drop this shell.
+        devShells.rust-extract = pkgs.mkShellNoCC {
+          packages = [
+            (pkgs.rocq-core.withPackages (ps: [
+              ps.stdpp
+              ps.TypedExtraction-rust
+              ps.TypedExtraction-common
+            ]))
+          ];
+        };
       };
     };
 }

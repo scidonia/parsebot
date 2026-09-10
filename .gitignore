@@ -28,6 +28,8 @@ builddep/
 # ocaml build artifacts (extracted parser bench)
 bench
 bench_toml
+bench_buffer
+bench_json_fast
 *.cmi
 *.cmo
 *.cmx
